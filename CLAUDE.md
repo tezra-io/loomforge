@@ -7,31 +7,21 @@ It is intentionally narrower than Paperclip.
 
 OpenClaw remains the front door and planner. Loom owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
 
-## How to Work
+## Behavioral Guidance
+- The approved design is the plan. Implement against it, do not quietly re-design the task mid-flight.
+- Don't assume. State assumptions explicitly before coding. If multiple interpretations exist, surface them instead of picking silently.
+- If the request or design is unclear, stop and ask. If repo reality conflicts with the design, surface the mismatch before coding.
+- Prefer the simplest correct solution. No speculative abstractions, no extra flexibility, no "while I'm here" cleverness.
+- Make surgical changes. Touch only what the request requires. Mention unrelated issues, don't fix them unless asked.
+- For multi-step work, define success in `step -> verify` form and keep going until the checks pass.
+- If 200 lines could be 50, rewrite it.
 
-### Planning
-- Plan mode for any non-trivial task (3+ steps or architectural decisions)
-- Detailed specs upfront — good plan = 1-shot implementation
-- State assumptions explicitly before coding. If multiple interpretations exist, surface them instead of picking silently.
-- If the request is ambiguous, ask. If a simpler approach exists, say so.
-- For multi-step work, write a short plan in `step -> verify` form.
-- If something goes sideways, STOP and re-plan
-
-### Test-First (Mandatory)
-1. Write failing tests that define correct behavior
-2. Make them pass
-3. Refactor while green
-
-"Write failing tests, then make them pass" — not "implement this feature."
-
-### Verification
-1. Write failing tests
-2. Implement to pass them
-3. Typecheck: `pnpm run typecheck`
-4. Full test suite: `pnpm run test`
-5. Lint: `pnpm run lint`
-
-Never mark done without proving it works.
+## Execution Contract
+- If changing behavior, write or update a failing test first.
+- Implement the smallest change that satisfies the design.
+- Run the relevant repo commands below before calling the work done. Default expectation: typecheck or build, tests, and lint.
+- For docs, config, or scaffolding changes, run the relevant checks and say what is not applicable.
+- Never mark work done without proof.
 
 ## Code Rules (Non-Negotiable)
 
@@ -64,21 +54,6 @@ pnpm run format
 - `docs/spec.md` — Product spec: features, business rules
 - `docs/tech.md` — Architecture: stack, schema, decisions
 - `docs/lessons.md` — Rules from past mistakes (update immediately on correction)
-
-## Don'ts
-- Don't commit without running tests
-- Don't implement without failing tests first
-- Don't add abstractions you weren't asked for
-- Don't silently choose among ambiguous interpretations
-- Don't improve adjacent code that wasn't part of the request
-- Don't assume intent on ambiguous bugs — ask
-
-## Principles
-- Simplest correct solution
-- If 200 lines could be 50, rewrite it
-- Find root causes, no band-aids
-- Minimal blast radius
-- Own mistakes — write a rule to prevent repeating
 
 ## Known Pitfalls
 - Update this section every time the repo teaches you the same lesson twice.
