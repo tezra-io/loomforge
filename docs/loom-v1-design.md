@@ -1,0 +1,779 @@
+# Loom V1 Design
+
+## Problem
+The old OpenClaw `dev-build` path proved the workflow shape, but it packed too much orchestration into cron prompts. One cron session had to choose work, manage issue state, spawn builders and reviewers, recover dead sessions, verify output, and decide when to ship. That created continuity problems, restart glue, and too much workflow logic living in prompts.
+
+Paperclip pointed at the right primitives, durable run state, isolated worktrees, explicit execution records, and clean builder/reviewer separation, but it also carries platform surface we do not need for V1.
+
+Loom exists to keep the useful primitives and cut the rest.
+
+## Goal
+Build a slim local workflow engine that can:
+1. accept issue identifiers from OpenClaw, either to run immediately or enter a ready queue
+2. fetch issue details from Linear
+3. reuse a single `dev` branch worktree per project, rebased on `main` before each run
+4. run a Codex builder in that worktree
+5. run a Claude reviewer on the resulting diff and verification evidence
+6. loop fixes until review passes or a hard stop occurs
+7. commit, push the `dev` branch, and mark the Linear issue Done
+
+## Non-goals
+Loom V1 is not:
+- a company/org platform
+- an autonomous CEO/manager hierarchy
+- a budgeting or approvals system
+- a browser UI product
+- a multi-tenant hosted service
+- a replacement for OpenClaw chat, planning, or shipping
+
+## Core decision
+### Rust vs TypeScript
+**Recommendation: TypeScript for V1.**
+
+This does not change the runner boundary. Codex remains the builder engine and Claude remains the reviewer engine.
+
+Why:
+- Loom is orchestration-heavy, not compute-heavy
+- Node/TypeScript is faster for process control, local HTTP, CLI glue, and SQLite-backed service development
+- the costliest risk is workflow iteration speed, not runtime throughput
+- a small TypeScript daemon is enough for a single-user local service
+
+Rust is still a valid future move if Loom becomes production infra or needs stricter concurrency guarantees, but it is the wrong optimization for V1.
+
+### CLI-only vs local HTTP API
+**Recommendation: tiny local HTTP API with a thin CLI wrapper.**
+
+Why:
+- OpenClaw can trigger runs and fetch status cleanly without shell parsing
+- logs, artifacts, and state queries become structured instead of text scraping
+- manual operator access still exists through the CLI
+
+CLI-only would push orchestration back into shell glue, which is exactly what Loom is supposed to remove.
+
+## System boundary
+### OpenClaw owns
+- chat with Sujeeth
+- design workflow and design approval
+- choosing which issues are eligible to enter Loom (by issue identifier only)
+- optional human approval gates before submitting to Loom
+- PR creation / merge decisions (if applicable)
+- user-facing summaries
+
+### Loom owns
+- **Linear issue fetching** — given an issue identifier, Loom reads the full issue (title, description, acceptance criteria, labels, comments) directly from Linear
+- **Linear status updates** — Loom transitions issue status during workflow (In Progress → In Review → Done/Blocked)
+- **commit and push** — Loom commits changes in the worktree and pushes the issue branch to remote
+- durable workflow state
+- durable ready queue and single-run sequencing
+- execution records and logs
+- worktree lifecycle
+- builder/reviewer handoff
+- verification execution records
+- retry/recovery behavior
+- structured result notification to OpenClaw
+
+## High-level architecture
+```text
+OpenClaw
+  -> Loom API / CLI / MCP server
+     -> Workflow engine
+        -> Linear client (issue fetch + status sync)
+        -> Project registry
+        -> SQLite state store
+        -> Worktree manager
+        -> Codex runner
+        -> Claude runner
+        -> Artifact store
+```
+
+V1 uses one long-lived local daemon, `loomd`, plus a thin `loom` CLI.
+
+### Daemon lifecycle
+- `loomd` runs as a user-level `launchd` service on macOS
+- Loom spins up along with OpenClaw, not as a separate manual start habit
+- the CLI surfaces whether the daemon is installed/running and fails clearly if the service is unavailable
+- on graceful shutdown (`SIGTERM`):
+  - persist current run state to SQLite before exiting
+  - transition any non-terminal in-flight run to `cancelled` with `cancelReason: daemon_shutdown`
+  - on next start, the recovery model (see Persistence) determines whether to resume or rerun
+- the CLI exposes `loom status` to check daemon health and current run state
+
+Runner access constraint:
+- Loom must talk to Codex and Claude through their harness interfaces only
+- no OAuth for runner access in V1 — harness CLIs handle their own auth
+- no replacing the Codex builder / Claude reviewer split with generic provider auth glue
+- Linear API access is separate from runner access — Loom authenticates to Linear via API key for issue fetching and status sync
+
+V1 also keeps execution intentionally simple: one active run at a time, with queued runs allowed for sequencing but not parallel execution.
+
+### Queue-drain mechanism
+- event-driven, not timer-based: Loom checks the ready queue when a run reaches a terminal state (`shipped`, `failed`, `blocked`, `cancelled`) or when a new item is enqueued via the API
+- no internal polling timer — this stays consistent with the "no cron inside Loom" principle
+- if the engine is idle and the queue is non-empty, dequeue the next item immediately
+
+### `run_now_if_idle` rejection behavior
+When OpenClaw sends `execution_mode: run_now_if_idle` and the engine is not idle:
+- return a structured rejection with HTTP 409, including current run ID and state
+- OpenClaw decides whether to re-submit as `enqueue`
+- Loom does not silently auto-enqueue
+
+### Queue policy
+- OpenClaw explicitly submits work into Loom, Loom does not discover issues on its own
+- queued work is durable in SQLite and survives daemon restarts
+- V1 dequeues in FIFO order unless OpenClaw explicitly cancels and re-enqueues items
+- queueing exists to isolate run orchestration from cron, not to add autonomous prioritization
+
+## Main modules
+### 1. API layer
+Responsibilities:
+- accept immediate or queued run requests from OpenClaw
+- expose queue state, run status, logs, findings, and artifacts
+- expose retry/cancel/cleanup operations
+- validate payloads and project references
+
+Suggested endpoints:
+- `GET /health`
+- `POST /runs`
+- `GET /runs/:id`
+- `GET /runs/:id/logs`
+- `GET /runs/:id/artifacts`
+- `GET /queue`
+- `POST /runs/:id/retry`
+- `POST /runs/:id/cancel`
+- `POST /workspaces/:project/:issue/cleanup`
+
+A thin CLI wraps these endpoints for local operator use.
+
+### 2. Linear client
+Responsibilities:
+- fetch issue details from Linear given an issue identifier (e.g. `TEZ-412`)
+- read: title, description, acceptance criteria, labels, assignee, comments, priority
+- write: update issue status during workflow transitions
+- cache fetched issue data as an artifact (issue snapshot) so runs are reproducible even if the issue is later edited
+
+V1 uses Linear as the only issue tracker. The client is a thin adapter that can be swapped later if needed.
+
+Access method:
+- use the `linear` CLI or the Linear GraphQL API via `@linear/sdk`
+- authenticate via a Linear API key stored in Loom's global config (`~/.loom/config.yaml`)
+- no OAuth flow — single-user local daemon, API key is sufficient
+
+Linear status mapping:
+| Loom state | Linear status |
+|---|---|
+| `queued` | *(no change — issue was already selected by OpenClaw)* |
+| `preparing_workspace` | In Progress |
+| `building` | In Progress |
+| `reviewing` | In Review |
+| `ready_for_ship` | *(no change — push in progress)* |
+| `shipped` | Done |
+| `blocked` | Blocked |
+| `failed` | Blocked |
+| `cancelled` | *(no change — operator decision)* |
+
+The mapping is configurable per project (see project config `linearStatuses`).
+
+Global config addition:
+```yaml
+# ~/.loom/config.yaml
+linear:
+  apiKey: lin_api_xxxxx
+```
+
+### 3. Project registry
+Responsibilities:
+- map project slug -> repo root
+- define default branch
+- define verification commands
+- define worktree root
+- define builder/reviewer policy knobs
+
+V1 should keep project config in checked-in files, not only the database. The database stores runtime state; config files store operator intent.
+
+Suggested config shape:
+```yaml
+slug: rustyclaw
+repoRoot: /Users/sujshe/projects/rustyclaw
+defaultBranch: master
+worktreeRoot: /Users/sujshe/.loom/worktrees/rustyclaw
+devBranch: dev                               # all issues commit here, rebased on defaultBranch before each run
+verify:
+  - cargo test
+  - cargo fmt --check
+reviewPolicy:
+  maxRevisionLoops: 3
+timeouts:
+  builderMinutes: 15
+  reviewerMinutes: 5
+  verificationMinutes: 5
+linearStatuses:                              # optional overrides per project
+  inProgress: "In Progress"
+  inReview: "In Review"
+  blocked: "Blocked"
+```
+
+### 3. Workflow engine
+Responsibilities:
+- create runs
+- advance the state machine
+- invoke runners in the right order
+- enforce retry limits
+- decide terminal outcomes
+
+The workflow engine is the center of Loom V1. The config loader, Linear client,
+worktree manager, runners, verifier, artifact store, API, CLI, and MCP server
+exist to support this engine. Do not keep expanding `src/config/` once the
+registry can load project intent; subsequent work should wire execution modules
+into the run lifecycle below.
+
+Minimum engine behavior:
+- accept a submitted run and persist it as `queued`
+- reject `run_now_if_idle` with busy metadata when any run is active or already queued
+- drain the durable ready queue only when the engine is idle
+- fetch and snapshot the Linear issue before invoking any runner
+- transition through `preparing_workspace -> building -> verifying -> reviewing`
+- create a new run attempt for each build -> verify -> review cycle
+- enter `revising` and increment one shared `revisionCount` for verification failures or review findings while budget remains
+- enter `ready_for_ship` only after committed changes pass verification and review
+- invoke Codex push only from `ready_for_ship`, then mark Linear Done and emit the final handoff
+- emit an event for every state transition so recovery can reconstruct the latest valid state
+
+The engine is deterministic. It does not invent priorities or choose issues on its own in V1. It only drains the explicit ready queue it has already been given.
+
+### 4. Worktree manager
+Responsibilities:
+- create or reuse a single worktree per project for the `dev` branch
+- rebase `dev` on the default branch (e.g. `main`/`master`) before each run (this is the only git operation Loom performs directly — all other git operations are handled by Codex, which can fix hook failures autonomously)
+- verify clean working state before a run
+- record workspace metadata
+- cleanup worktree on operator request
+
+Branch strategy:
+- all issues for a project commit to a single `dev` branch
+- the branch name is configurable per project via `devBranch` (default: `dev`)
+- before each run starts, Loom rebases `dev` onto the project's `defaultBranch` to pick up any changes that were merged since the last run
+- if the rebase fails (conflicts), the run transitions to `blocked` with `failureReason: rebase_conflict` — operator must resolve manually
+- this keeps the `dev` branch always ahead of `main` with a clean linear history, making it easy to test and merge
+
+Worktree policy:
+- one project -> one worktree (reused across issues)
+- the worktree is long-lived, not created/destroyed per issue
+- since V1 runs one issue at a time, there is no contention
+- failed or blocked runs leave the worktree intact for inspection
+- operator can clean up via `loom cleanup`
+
+### 5. Builder runner
+Responsibilities:
+- prepare the Codex prompt/context package (including git instructions: commit format, push to `dev` only, never push to default branch)
+- run Codex in the issue worktree through its harness
+- capture stdout/stderr, exit code, changed files, and summary
+- normalize output into structured artifacts
+- verify that commits and push landed correctly after the builder exits
+
+Harness invocation:
+- binary: `codex` CLI
+- permission mode: `--approval-mode full-auto` (no interactive prompts; the builder must write files, run commands, and iterate autonomously within the worktree)
+- working directory: set to the issue worktree path
+- prompt is passed via stdin or `--prompt` flag
+- stdout/stderr are captured to `builder.log`
+- Loom kills the child process on wall-clock timeout
+
+Git responsibility split:
+
+Codex (builder) owns `git add`, `git commit`, and `git push` because git hooks (pre-commit, pre-push) may reject operations. Codex in full-auto can see the hook failure, fix the underlying issue (lint, format, test), and retry — Loom cannot because it has no LLM access to reason about or fix hook failures.
+
+Loom owns `git rebase` of `dev` onto the default branch before each run. This is a pre-build step before Codex is invoked. If the rebase produces conflicts, the run transitions to `blocked` with `failureReason: rebase_conflict` because rebase conflicts require human judgment.
+
+Claude (reviewer) performs no git operations — read-only analysis only.
+
+Commit and push contract:
+
+The builder is invoked twice in different modes during the workflow:
+
+1. **Build phase** — Codex implements the issue and commits:
+   - the prompt instructs Codex to `git add` and `git commit` on the `dev` branch after implementation
+   - commit message format: `<issue-identifier>: <summary>` (e.g. `TEZ-412: add workflow state machine`)
+   - Codex does NOT push during build phase
+   - if a pre-commit hook rejects, Codex fixes the code and retries autonomously
+   - during revision loops, each revision is a new commit (not an amend) so the full history is inspectable
+
+2. **Push phase** (after review passes) — Codex pushes:
+   - the prompt instructs Codex to `git push` the `dev` branch to remote
+   - push is to `dev` only — the prompt explicitly forbids pushing to the default/main branch
+   - if a pre-push hook rejects, Codex fixes and retries
+   - this is what transitions the run from `ready_for_ship` to `shipped`
+
+Verification and review always run against committed changes on `dev`, not dirty worktree state.
+
+What Loom verifies after each builder invocation:
+- after build phase: new commits exist on `dev` (otherwise outcome is `failed`)
+- after push phase: remote is up to date (otherwise outcome is `failed` with `failureReason: push_failed`)
+- commit SHAs are recorded in the `BuilderResult` artifact
+
+Contract:
+```ts
+interface BuilderResult {
+  outcome: "success" | "failed" | "blocked";
+  summary: string;
+  changedFiles: string[];
+  commitSha: string | null;  // null if outcome is not success
+  rawLogPath: string;
+}
+```
+
+### 6. Reviewer runner
+Responsibilities:
+- prepare the Claude review package
+- run Claude review through its harness
+- include diff, issue context, and verification evidence
+- normalize findings into P0/P1/P2 buckets
+
+Harness invocation:
+- binary: `claude` CLI (Claude Code)
+- permission mode: `--dangerously-skip-permissions` (no interactive approval prompts; the reviewer runs unattended as a daemon subprocess)
+- the reviewer prompt is constructed by Loom to be read-only in practice (diff analysis, not code mutation), but the permission bypass is required because Claude Code has no read-only mode and the daemon cannot respond to interactive prompts
+- working directory: set to the issue worktree path so the reviewer can read files for context
+- the review prompt includes: diff, issue context, acceptance criteria, and verification evidence
+- stdout/stderr are captured to `review.log`
+- Loom kills the child process on wall-clock timeout
+
+Contract:
+```ts
+interface ReviewFinding {
+  severity: "P0" | "P1" | "P2";
+  title: string;
+  detail: string;
+  file?: string;
+}
+
+interface ReviewResult {
+  outcome: "pass" | "revise" | "blocked";
+  findings: ReviewFinding[];
+  summary: string;
+  rawLogPath: string;
+}
+```
+
+### Runner permission model rationale
+Both runners must operate without interactive approval because Loom runs as an unattended daemon. There is no TTY or user present to approve tool calls.
+
+Security is maintained through other constraints:
+- runners only execute in isolated issue worktrees, never in the main repo
+- Loom controls the prompt — issue text cannot inject arbitrary runner flags
+- verification commands come from project config, not issue text
+- Loom commits and pushes to the `dev` branch only, never to `main`
+- wall-clock timeouts kill runaway processes
+- code must pass verification + Claude review before push
+
+### 7. Artifact store
+Responsibilities:
+- persist prompts used for each builder/reviewer run
+- store verification output
+- store run summaries and findings
+- expose stable file paths for OpenClaw inspection
+
+Suggested filesystem layout:
+```text
+~/.loom/
+├── data/
+│   ├── loom.db
+│   ├── runs/
+│   │   └── <run-id>/
+│   │       ├── builder-prompt.md
+│   │       ├── builder.log
+│   │       ├── verify.log
+│   │       ├── review-prompt.md
+│   │       ├── review.log
+│   │       └── handoff.json
+└── worktrees/
+```
+
+## Workflow state machine
+```text
+queued
+  -> preparing_workspace
+  -> building (commits changes on success)
+  -> verifying
+  -> reviewing
+  -> revising (if review requires fixes)
+  -> building
+  -> ...
+  -> ready_for_ship (committed, review passed, push pending)
+  -> shipped (Loom marks Done in Linear, notifies OpenClaw)
+
+failure exits from any non-terminal state:
+- blocked
+- failed
+- cancelled
+
+explicit blocked transitions:
+- preparing_workspace -> blocked (dirty workspace, env error)
+- verifying -> blocked (environmental failure, not code-related)
+- reviewing -> blocked (unresolved P0 after final loop)
+
+cancellation:
+- any non-terminal state (queued, preparing_workspace, building, verifying,
+  reviewing, revising) may transition to cancelled via API or daemon shutdown
+```
+
+State meanings:
+- `queued`: accepted but not started
+- `preparing_workspace`: worktree setup + rebase `dev` onto default branch
+- `building`: Codex is implementing
+- `verifying`: Loom is running configured checks
+- `reviewing`: Claude is reviewing the diff and evidence
+- `revising`: findings are being fed back into another builder loop
+- `ready_for_ship`: implementation and review passed, changes committed on `dev` — Codex push in progress (intermediate, not terminal)
+- `shipped`: `dev` pushed to remote, Linear marked Done, OpenClaw notified — terminal
+- `blocked`: human or configuration help required
+- `failed`: unrecoverable runner/workspace/verification failure
+- `cancelled`: operator stopped the run
+
+Cancellation rules:
+- any non-terminal state may transition to `cancelled` through the API or daemon shutdown path
+- graceful daemon shutdown should not discard run state; interrupted work must remain recoverable on next start
+
+Non-happy-path terminal states carry a machine-readable `failureReason`:
+
+`failed` reasons (unrecoverable, no human intervention will help without code changes):
+- `timeout`
+- `verification_failed`
+- `runner_error`
+- `workspace_error`
+- `recovery_error`
+- `push_failed`
+
+`blocked` reasons (needs human or operator intervention):
+- `rebase_conflict`
+- `runner_auth_missing`
+- `dirty_workspace`
+- `review_loop_exhausted`
+- `env_failure`
+
+`cancelled` reasons (intentional stop):
+- `operator_cancel`
+- `daemon_shutdown`
+
+V1 revision policy:
+- max 3 revise loops by default
+- a single `revisionCount` is incremented on any return to `building`, whether the trigger was verification failure or review findings
+- any unresolved P0 after the final loop -> `blocked`
+- verification command failure after a build -> return to `revising` with evidence if fixable, otherwise `failed`
+
+## Persistence model
+Use SQLite for runtime state.
+
+Core tables:
+- `projects`
+- `runs`
+- `run_attempts`
+- `workspaces`
+- `verifications`
+- `reviews`
+- `review_findings`
+- `artifacts`
+- `events`
+
+Important principle:
+- config belongs in files
+- execution history belongs in SQLite + artifact files
+
+### Phase 3 persistence implementation
+The first persistence implementation should use Node's built-in `node:sqlite`
+`DatabaseSync` API so Loom does not need a native SQLite package dependency in
+V1. The implementation lives behind a small `WorkflowRunStore` interface; the
+workflow engine calls that interface whenever it creates a run, updates a
+state, creates an attempt, records runner output, updates queue position, or
+creates the final handoff.
+
+The SQLite store is not allowed to own orchestration decisions. It is a durable
+snapshot/event store for the workflow engine:
+- `projects` mirrors checked-in project config for foreign-key integrity and diagnostics
+- `runs` stores the current state, failure reason, queue position, issue snapshot, and handoff JSON
+- `run_attempts` stores each build -> verify -> review cycle
+- `workspaces` stores the active worktree path and branch per run
+- `verifications`, `reviews`, and `review_findings` expose structured query surfaces in addition to the attempt JSON snapshots
+- `artifacts` records durable artifact paths such as `handoff.json`
+- `events` records every state transition and revision request in append order
+
+The engine remains the source of lifecycle truth. SQLite persistence must be
+easy to replace or repair without spreading database calls through Linear,
+worktree, runner, API, or MCP modules.
+
+Relationship model:
+- one `run` = one top-level request to execute a specific issue
+- one `run_attempt` = one build -> verify -> review cycle within that run
+- a revise loop creates another `run_attempt` under the same `run`
+
+Recovery must use a two-phase transition model:
+1. record runner completion as an event with artifact/log pointers
+2. advance the run state
+
+On restart:
+- if completion event exists without the matching state transition, apply the transition
+- if neither exists, rerun the interrupted step from scratch
+- assume child Codex/Claude processes are dead and do not attempt to reconnect to them
+
+First-cut restart recovery:
+- `loomd` constructs the workflow engine with the SQLite store during daemon bootstrap
+- the store lists all non-terminal runs (`queued`, `preparing_workspace`, `building`, `verifying`, `reviewing`, `revising`, `ready_for_ship`)
+- persisted `queued` runs keep their FIFO order and return to the ready queue
+- persisted in-flight runs are requeued with a `state_transition` event back to `queued` containing `recoveryReason: daemon_restart` and `recoveredFromState`
+- the next queue drain reruns the run from the workflow start; old attempts/events remain inspectable, and new attempts are appended
+- terminal runs (`shipped`, `blocked`, `failed`, `cancelled`) are never automatically requeued
+
+Every state transition should emit an event row so recovery can reconstruct the latest valid state.
+
+## OpenClaw integration
+V1 integration should stay explicit. OpenClaw's role is simplified: it tells Loom *what* to work on (by issue identifier), and Loom handles the rest.
+
+### MCP server
+The primary integration path between OpenClaw and Loom is **MCP (Model Context Protocol)**.
+
+Why MCP over raw HTTP:
+- OpenClaw is a Claude Code instance — MCP is its native tool protocol
+- Loom's typed contracts (zod schemas) map directly to MCP tool schemas
+- OpenClaw gets structured tool discovery, not prompt instructions on how to format curl calls
+- no shell parsing, no text scraping — the exact problems Loom was built to eliminate
+
+MCP tools exposed by Loom:
+- `loom_submit_run` — submit an issue for execution (project slug + issue identifier + execution mode)
+- `loom_get_run` — get full run state, findings, and handoff data
+- `loom_get_queue` — list queued and active runs
+- `loom_retry_run` — retry a failed/blocked run
+- `loom_cancel_run` — cancel a run
+- `loom_cleanup_workspace` — clean up a worktree
+- `loom_health` — daemon health check
+
+OpenClaw configuration:
+```jsonc
+// ~/.claude/settings.json (or project-level)
+{
+  "mcpServers": {
+    "loom": {
+      "command": "loom",
+      "args": ["mcp-serve"]
+    }
+  }
+}
+```
+
+The MCP server runs as a subprocess spawned by OpenClaw's Claude Code session, connecting to the running `loomd` daemon over its local HTTP API. This means the HTTP API still exists as the internal transport — the MCP server is a thin typed adapter on top of it.
+
+The HTTP API and CLI remain available for operator diagnostics and non-MCP consumers.
+
+### Trigger contract
+OpenClaw sends (via `loom_submit_run` MCP tool or `POST /runs`):
+- project slug
+- Linear issue identifier (e.g. `TEZ-412`)
+- execution mode: `run_now_if_idle` or `enqueue`
+- optional design doc references
+- optional priority/reason metadata
+
+Loom fetches the full issue details (title, description, acceptance criteria, labels, comments) from Linear directly. OpenClaw no longer needs to package issue content.
+
+### Response contract
+Loom returns a run ID immediately, then OpenClaw polls or reads status via `loom_get_run`.
+If the run was queued, Loom also returns queue position metadata.
+
+Final handoff back to OpenClaw includes:
+- run status
+- worktree path
+- branch name
+- changed files
+- commit SHAs
+- remote push status
+- verification command results
+- review summary
+- structured P0/P1/P2 findings
+- Linear issue status after update
+- recommended next action (`merge`, `blocked`, `retry`, `manual_review`)
+
+`handoff.json` is a contract boundary with OpenClaw and should be defined as an explicit zod schema early, alongside the DB/event model. The schema must include a `version` field (starting at `1`) so OpenClaw and Loom can evolve at different speeds without silent contract drift.
+
+In V1, OpenClaw still decides what enters Loom, but Loom handles everything from issue fetching through review. Loom owns the ready queue and starts the next queued run when idle.
+
+## Failure modes and handling
+### Runner/auth failures
+Examples:
+- Codex harness missing or unauthenticated
+- Claude harness missing or unauthenticated
+
+Handling:
+- fail fast during preflight
+- mark run `blocked`
+- return exact reason to OpenClaw
+
+### Runner timeout or hang
+Examples:
+- Codex process never exits
+- Claude review stalls without producing output
+
+Handling:
+- enforce per-runner wall-clock timeouts from project config
+- kill the child process on timeout
+- attach partial logs and mark `failed` with `failureReason: timeout`
+- if policy later allows timeout retries, consume revision budget explicitly rather than retrying forever
+
+### Dirty workspace
+Examples:
+- target repo has uncommitted changes on default branch
+- existing worktree contains unrelated edits
+
+Handling:
+- refuse to run
+- mark `blocked`
+- require operator cleanup
+
+### Verification failure
+Examples:
+- tests fail
+- lint or format checks fail
+
+Handling:
+- attach logs
+- if within revision budget, feed failure back into revise loop
+- otherwise mark `failed`
+
+### Review loop exhaustion
+Examples:
+- repeated P0s across three cycles
+
+Handling:
+- mark `blocked`
+- keep worktree and artifacts for inspection
+
+### Process interruption
+Examples:
+- daemon crash
+- host restart
+
+Handling:
+- recover from SQLite state and artifact files
+- use the two-phase transition model from the persistence section to determine whether to advance state or rerun the interrupted step
+- never assume the old child process is still alive after restart
+- operator can retry from the last stable point if automatic recovery cannot decide safely
+
+## Security and trust model
+V1 assumes a single trusted local operator environment.
+
+Rules:
+- Loom only runs against explicitly registered local repos
+- runner commands execute in issue worktrees, not arbitrary paths
+- Codex and Claude access must stay harness-only in V1, with no direct OAuth or generic provider API path
+- verification commands come from project config, not issue text
+- no arbitrary external code execution surface beyond configured runners and git/test commands
+- Loom commits and pushes to the `dev` branch only, never to the default/main branch — merging `dev` into `main` is owned by OpenClaw or the operator
+
+## Reference material and reuse guidance
+
+### Paperclip reference repo
+Path: `/Users/sujshe/projects/paperclip`
+
+Paperclip is a full platform with multi-tenant orgs, Postgres, UI, plugins, and 7+ adapter types. Most of it is too heavy to extract for Loom. Build Loom from scratch, referencing two specific sources:
+
+### Dev-build skill (primary reference)
+Path: `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
+
+The proven workflow that Loom is hardening into a durable state machine. Reference for:
+- workflow shape: Context → Build → Verify → Review → Fix → Ship
+- builder prompt requirements (what to include: issue title, description, acceptance criteria, file paths)
+- reviewer prompt requirements (review only, P0/P1/P2 classification, no file edits)
+- revision loop logic (feed P0s + easy P1s back to builder, re-verify, re-review, repeat until zero P0s)
+- Linear query patterns (which fields to fetch, status transitions)
+- complexity assessment (small/medium/large) and deep reasoning (`ULTRATHINK`) for complex issues
+- commit message format: `feat(TEZ-XXX): <description>` or `fix(TEZ-XXX): <description>`
+- final review sweep for batches of 3+ issues
+
+### Paperclip MCP server (pattern reference)
+Path: `/Users/sujshe/projects/paperclip/packages/mcp-server/src/tools.ts`
+
+Reference for:
+- `makeTool` pattern: clean tool definition with zod schema + execute function
+- error formatting (`formatErrorResponse`)
+- tool input validation with zod `.parse()`
+
+### What NOT to reuse from Paperclip
+- **Database layer** — Paperclip uses Postgres via Drizzle. Loom uses SQLite. Different driver, simpler schema.
+- **Worktree config** (`server/src/worktree-config.ts`) — tied to Postgres ports, multi-instance repair, env file management. Too coupled.
+- **Execution workspaces** (`server/src/services/execution-workspaces.ts`) — tied to Drizzle ORM, multi-workspace runtime services. The `runGit()` helper pattern is useful but trivial to rewrite.
+- **Adapter registry** (`server/src/adapters/`) — supports 7+ adapters with plugins. Loom just needs Codex + Claude.
+- **Auth, approvals, companies, org-chart, budgets, UI routes** — all out of scope for Loom.
+
+## Recommended V1 stack
+- Node 22+
+- TypeScript
+- Fastify for local HTTP API
+- Commander for CLI
+- `@modelcontextprotocol/sdk` for MCP server
+- `@linear/sdk` for Linear API access
+- better-sqlite3 or equivalent synchronous SQLite driver
+- execa for process spawning
+- zod for config and API validation
+- pino for logs
+- `yaml` or `js-yaml` for project config parsing
+
+## Initial directory structure
+```text
+loom/
+├── CLAUDE.md
+├── README.md
+├── docs/
+│   ├── APPROACHES.md
+│   ├── CONTEXT.md
+│   └── loom-v1-design.md
+├── src/
+│   ├── api/
+│   ├── app/
+│   ├── config/
+│   ├── db/
+│   ├── linear/
+│   ├── mcp/
+│   ├── workflow/
+│   ├── runners/
+│   ├── worktrees/
+│   ├── artifacts/
+│   └── cli/
+└── tests/
+```
+
+## V1 build order
+0. project scaffolding, package manager, tsconfig, lint/test harness, and baseline CI/local commands
+1. config loader + project registry + global config (`~/.loom/config.yaml`)
+2. workflow engine state machine, run/attempt/event types, queue-drain behavior, revision budget, and stub dependency tests
+3. SQLite schema + event model + `handoff.json` zod schema wired to the workflow contracts
+4. runnable daemon shell: local HTTP API + CLI wrapper wired to the engine, SQLite store, and stub Linear/worktree/runner dependencies
+5. real verification runner that executes configured commands through `execa`
+6. worktree manager for reusable `dev` branch worktrees and pre-run rebase
+7. Linear client for issue fetch, issue snapshot artifacts, and status sync
+8. MCP server adapter over the local HTTP API
+9. OpenClaw integration contract and end-to-end MCP tool exercise
+10. real Codex/Claude runner adapters, including prompt construction, output parsing, timeouts, partial logs, commit validation, and push validation
+11. `launchd` installer/status integration for running `loomd` with OpenClaw startup
+
+Implementation note: if the repository already has step 1 working, the next
+meaningful change is not more project-config surface. Build `src/workflow/`
+first with dependency interfaces and tests that prove the whole happy path and
+revision loop. The SQLite, Linear, worktree, runner, API, and MCP modules can
+then replace those test doubles without changing the state machine.
+
+Runnable-shell note: step 4 intentionally comes before real Linear, git, Codex,
+and Claude integrations. The first daemon may wire the engine to stub
+Linear/worktree/builder/verifier/reviewer implementations, but it must still
+expose the real process boundary: CLI -> local HTTP API -> workflow engine ->
+SQLite-backed state. That gives OpenClaw/MCP and operator commands a stable
+target while steps 5-10 replace the stubs.
+
+## Human decisions locked in
+1. V1 language: TypeScript.
+2. V1 should include a small durable ready queue so orchestration can move out of cron.
+3. Verification policy stays repo-config only in V1.
+4. Loom runtime data lives under `~/.loom/`.
+5. V1 uses `launchd` integration and should spin up along with OpenClaw.
+6. Loom owns Linear integration (issue fetching + status sync), not OpenClaw.
+7. Linear is the only issue tracker in V1.
+8. OpenClaw integrates with Loom via MCP server as the primary path.
+9. Codex builder runs in `full-auto` mode, Claude reviewer runs with `skip-permissions`.
+
+## Recommendation
+Build Loom V1 as a slim local TypeScript daemon with an MCP server (primary OpenClaw integration), HTTP API, CLI wrapper, SQLite state, a small durable ready queue, direct Linear integration for issue fetching and status sync, a single long-lived `dev` branch worktree per project (rebased on `main` before each run), repo-config-only verification, `~/.loom/` runtime storage, `launchd` lifecycle integration with OpenClaw startup, and a complete build-verify-review-commit-push pipeline. Codex commits after each build and pushes after review passes; Loom marks the issue Done in Linear. OpenClaw’s role is reduced to selecting issues and deciding when to merge `dev` into `main`. That gets the real win — durable workflow execution with minimal OpenClaw burden — without dragging in Paperclip’s platform surface.

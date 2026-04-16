@@ -51,12 +51,14 @@ pnpm run format
 
 ## Docs
 - `docs/` — repo docs directory, start here before coding
-- `docs/spec.md` — Product spec: features, business rules
-- `docs/tech.md` — Architecture: stack, schema, decisions
-- `docs/lessons.md` — Rules from past mistakes (update immediately on correction)
+- `docs/loom-v1-design.md` — V1 design: architecture, state machine, contracts, build order
+- `docs/CONTEXT.md` — Project context: why Loom exists, scope, system boundary
+- `docs/APPROACHES.md` — Evaluated approaches and trade-offs
+- `docs/loom-v1-review.md` — Design review findings and resolutions
 
 ## Known Pitfalls
-- Update this section every time the repo teaches you the same lesson twice.
+- Do not confuse config work with Loom's product surface. Config is only step 1; the core product is the workflow engine that owns runs, queue draining, Linear sync, worktree prep, build, verification, review, revision loops, push, and handoff.
+- After touching `src/config/`, the next implementation step should usually be `src/workflow/`, `src/db/`, `src/worktrees/`, `src/runners/`, `src/linear/`, `src/api/`, or `src/mcp/`. Do not add more config knobs unless an engine/module contract already needs them.
 
 ---
 _Every mistake is a rule waiting to be written._
@@ -82,9 +84,8 @@ These notes came from the previous `CLAUDE.md`. Keep the template above as the p
 - No org chart, CEO, manager, approval, budget, or multi-tenant abstractions in V1.
 - OpenClaw decides what work enters Loom (by issue identifier only). OpenClaw does not package issue content.
 - Loom owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
-- All issues commit to a single `dev` branch per project, rebased on `main` before each run. Loom never pushes to `main` — merging `dev` into `main` is OpenClaw's or operator's concern.
 - OpenClaw integrates with Loom via MCP server as the primary path.
-- All issues for a project run on a single `dev` branch worktree, rebased on `main` before each run.
+- All issues for a project commit to a single `dev` branch worktree, rebased on the default branch before each run. OpenClaw or the operator merges `dev` into `main`.
 - V1 allows one active run at a time, backed by a small durable ready queue.
 - Loom should run as a `launchd`-managed local daemon and start along with OpenClaw.
 - Keep Codex as the builder and Claude as the reviewer in V1.
@@ -133,7 +134,7 @@ These notes came from the previous `CLAUDE.md`. Keep the template above as the p
 - `src/db/` — SQLite schema, migrations, repositories
 - `src/linear/` — Linear API client for issue fetching and status sync
 - `src/mcp/` — MCP server adapter for OpenClaw integration
-- `src/workflow/` — run state machine and orchestration
+- `src/workflow/` — run state machine and orchestration; this is the main engine and must call Linear, worktree, runner, verification, review, push, and handoff contracts in order
 - `src/runners/` — harness-based Codex builder (full-auto) and Claude reviewer (skip-permissions) adapters
 - `src/worktrees/` — git worktree creation, reuse, cleanup
 - `src/artifacts/` — prompt/log/result persistence

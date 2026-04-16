@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   loadProjectConfigRegistry,
+  parseGlobalConfig,
   parseOpenClawRunRequest,
   parseProjectConfigRegistry,
 } from "../src/config/index.js";
@@ -18,6 +19,7 @@ projects:
   - slug: loom
     repoRoot: /repos/loom
     defaultBranch: main
+    devBranch: develop
     verification:
       commands:
         - name: unit
@@ -32,6 +34,11 @@ projects:
     review:
       maxRevisionLoops: 2
       blockingSeverities: [P0, P1]
+    linearStatuses:
+      inProgress: Working
+      inReview: Reviewing
+      done: Shipped
+      blocked: Stuck
 `,
       { homeDir: "/Users/alice" },
     );
@@ -42,6 +49,7 @@ projects:
       slug: "loom",
       repoRoot: "/repos/loom",
       defaultBranch: "main",
+      devBranch: "develop",
       worktreeRoot: "/Users/alice/.loom/worktrees/loom",
       runtimeDataRoot: "/Users/alice/.loom/data/projects/loom",
       timeouts: {
@@ -52,6 +60,12 @@ projects:
       review: {
         maxRevisionLoops: 2,
         blockingSeverities: ["P0", "P1"],
+      },
+      linearStatuses: {
+        inProgress: "Working",
+        inReview: "Reviewing",
+        done: "Shipped",
+        blocked: "Stuck",
       },
     });
     expect(registry.projects[0]?.verification.commands).toEqual([
@@ -183,6 +197,36 @@ projects:
     ).toThrow(/duplicate project slug/);
   });
 
+  it("applies default devBranch and linearStatuses when omitted", () => {
+    const registry = parseProjectConfigRegistry(
+      `
+projects:
+  - slug: loom
+    repoRoot: /repos/loom
+    defaultBranch: main
+    verification:
+      commands:
+        - name: unit
+          command: pnpm test
+`,
+      { homeDir: "/Users/alice" },
+    );
+
+    expect(registry.projects[0]).toMatchObject({
+      devBranch: "dev",
+      review: {
+        maxRevisionLoops: 3,
+        blockingSeverities: ["P0", "P1"],
+      },
+      linearStatuses: {
+        inProgress: "In Progress",
+        inReview: "In Review",
+        done: "Done",
+        blocked: "Blocked",
+      },
+    });
+  });
+
   it("rejects verification commands from OpenClaw issue payloads", () => {
     expect(() =>
       parseOpenClawRunRequest({
@@ -203,5 +247,33 @@ projects:
       projectSlug: "loom",
       issueId: "TEZ-334",
     });
+  });
+});
+
+describe("global config", () => {
+  it("parses a valid global config with Linear API key", () => {
+    const config = parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+`);
+
+    expect(config).toEqual({
+      linear: { apiKey: "lin_api_xxxxx" },
+    });
+  });
+
+  it("rejects global config without Linear API key", () => {
+    expect(() => parseGlobalConfig(`linear:\n  apiKey: ""`)).toThrow(/Invalid global config/);
+    expect(() => parseGlobalConfig(`{}`)).toThrow(/Invalid global config/);
+  });
+
+  it("rejects global config with unknown fields", () => {
+    expect(() =>
+      parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+  orgId: org_123
+`),
+    ).toThrow(/Invalid global config/);
   });
 });

@@ -40,11 +40,22 @@ const reviewSchema = z
   .strict()
   .optional();
 
+const linearStatusesSchema = z
+  .object({
+    inProgress: nonEmptyStringSchema.optional(),
+    inReview: nonEmptyStringSchema.optional(),
+    done: nonEmptyStringSchema.optional(),
+    blocked: nonEmptyStringSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const projectConfigSchema = z
   .object({
     slug: slugSchema,
     repoRoot: pathSchema,
     defaultBranch: nonEmptyStringSchema,
+    devBranch: nonEmptyStringSchema.optional(),
     worktreeRoot: pathSchema.optional(),
     runtimeDataRoot: pathSchema.optional(),
     verification: z
@@ -54,6 +65,7 @@ const projectConfigSchema = z
       .strict(),
     timeouts: timeoutsSchema,
     review: reviewSchema,
+    linearStatuses: linearStatusesSchema,
   })
   .strict();
 
@@ -66,6 +78,16 @@ const registrySchema = z
       .strict()
       .optional(),
     projects: z.array(projectConfigSchema).nonempty(),
+  })
+  .strict();
+
+const globalConfigSchema = z
+  .object({
+    linear: z
+      .object({
+        apiKey: nonEmptyStringSchema,
+      })
+      .strict(),
   })
   .strict();
 
@@ -98,10 +120,18 @@ export interface ProjectReviewConfig {
   blockingSeverities: string[];
 }
 
+export interface LinearStatusConfig {
+  inProgress: string;
+  inReview: string;
+  done: string;
+  blocked: string;
+}
+
 export interface ProjectConfig {
   slug: string;
   repoRoot: string;
   defaultBranch: string;
+  devBranch: string;
   worktreeRoot: string;
   runtimeDataRoot: string;
   verification: {
@@ -109,6 +139,7 @@ export interface ProjectConfig {
   };
   timeouts: ProjectTimeoutConfig;
   review: ProjectReviewConfig;
+  linearStatuses: LinearStatusConfig;
 }
 
 export interface ProjectConfigRegistry {
@@ -117,6 +148,12 @@ export interface ProjectConfigRegistry {
   };
   projects: ProjectConfig[];
   bySlug: Map<string, ProjectConfig>;
+}
+
+export interface GlobalConfig {
+  linear: {
+    apiKey: string;
+  };
 }
 
 export interface OpenClawRunRequest {
@@ -176,6 +213,31 @@ export function parseOpenClawRunRequest(value: unknown): OpenClawRunRequest {
   return parsedRequest.data;
 }
 
+export async function loadGlobalConfig(configPath: string): Promise<GlobalConfig> {
+  const configText = await readFile(configPath, "utf8");
+  return parseGlobalConfig(configText);
+}
+
+export function parseGlobalConfig(configText: string): GlobalConfig {
+  let rawConfig: unknown;
+
+  try {
+    rawConfig = parseYaml(configText);
+  } catch (error) {
+    throw new Error("Invalid global config: YAML could not be parsed", {
+      cause: error,
+    });
+  }
+
+  const parsed = globalConfigSchema.safeParse(rawConfig);
+
+  if (!parsed.success) {
+    throw new Error("Invalid global config", { cause: parsed.error });
+  }
+
+  return parsed.data;
+}
+
 function buildProjectConfigRegistry(
   config: RawRegistryConfig,
   options: ProjectConfigRegistryOptions,
@@ -227,6 +289,7 @@ function buildProjectConfig(
     slug: project.slug,
     repoRoot: resolveConfigPath(project.repoRoot, context.configDir),
     defaultBranch: project.defaultBranch,
+    devBranch: project.devBranch ?? "dev",
     worktreeRoot: resolveConfigPath(
       project.worktreeRoot ?? join(context.homeDir, ".loom", "worktrees", project.slug),
       context.configDir,
@@ -244,8 +307,14 @@ function buildProjectConfig(
     },
     timeouts,
     review: {
-      maxRevisionLoops: project.review?.maxRevisionLoops ?? 1,
+      maxRevisionLoops: project.review?.maxRevisionLoops ?? 3,
       blockingSeverities: project.review?.blockingSeverities ?? ["P0", "P1"],
+    },
+    linearStatuses: {
+      inProgress: project.linearStatuses?.inProgress ?? "In Progress",
+      inReview: project.linearStatuses?.inReview ?? "In Review",
+      done: project.linearStatuses?.done ?? "Done",
+      blocked: project.linearStatuses?.blocked ?? "Blocked",
     },
   };
 }

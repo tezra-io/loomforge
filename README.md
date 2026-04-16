@@ -4,6 +4,44 @@ Loom is a slim local workflow engine for agentic software delivery.
 
 Goal: keep the parts Sujeeth actually needs from Paperclip, ditch the org-chart/platform overhead, and make design -> build -> review -> ship reliable.
 
+## Current Runnable Shell
+
+The daemon shell is runnable with stub workflow dependencies. It exercises the
+HTTP API, CLI, workflow engine, SQLite store, queue drain, and handoff path, but
+it does not yet call real Linear, git worktrees, Codex, or Claude.
+
+Create a project registry:
+
+```yaml
+runtime:
+  dataRoot: .loom-data
+projects:
+  - slug: loom
+    repoRoot: /Users/sujshe/projects/loom
+    defaultBranch: main
+    verification:
+      commands:
+        - name: test
+          command: pnpm test
+```
+
+Start the local daemon:
+
+```sh
+pnpm run dev -- start --config ./loom.yaml --port 3777
+```
+
+Use the CLI from another shell:
+
+```sh
+pnpm run dev -- status
+pnpm run dev -- submit loom TEZ-1
+pnpm run dev -- queue
+```
+
+The next implementation phases replace the stubs with the real verification
+runner, worktree manager, Linear client, MCP adapter, and Codex/Claude runners.
+
 ## System Architecture
 
 ```mermaid
