@@ -5,7 +5,7 @@ This plan starts from the current runnable shell:
 - `loom start` launches a Fastify daemon.
 - CLI commands call the daemon over local HTTP.
 - The workflow engine persists runs in SQLite.
-- Linear, worktree, builder, verifier, and reviewer dependencies are still stubs.
+- Linear, workspace, builder, verifier, and reviewer dependencies are still stubs.
 
 The next work should replace those stubs with real adapters while keeping the
 engine as the center of the system. Do not spend more time expanding
@@ -64,41 +64,40 @@ Done when:
 - Tests cover pass, failing command, missing binary/env failure, timeout, and multi-command aggregation.
 - `pnpm run build && pnpm run test && pnpm run lint && pnpm run format` pass.
 
-## Phase 2: Git Worktree Manager
+## Phase 2: Git Workspace Manager
 
-Goal: replace the stub workspace with a reusable `dev` branch worktree per
-project.
+Goal: replace the stub workspace with a manager that prepares the project repo's
+`dev` branch for each run. No worktrees — work directly in the repo checkout.
 
 Files to add or change:
 
-- `src/worktrees/git-worktree-manager.ts`
+- `src/worktrees/git-workspace-manager.ts` (rename module to `workspace` later if desired)
 - `src/worktrees/index.ts`
 - `src/app/runtime.ts`
-- `src/api/server.ts`
-- `src/cli/program.ts`
-- `tests/worktrees/git-worktree-manager.test.ts`
+- `tests/worktrees/git-workspace-manager.test.ts`
 
 Implementation:
 
-- Implement `WorktreeManager` from `src/workflow/types.ts`.
-- Use `execa` for git operations.
+- Implement `WorktreeManager` from `src/workflow/types.ts` (interface stays the same — it returns a `WorkspaceSnapshot` with `path` and `branchName`).
+- Remove `worktreeRoot` from `ProjectConfig` and config schema since the workspace is the repo itself. Update `WorkspaceSnapshot.path` to return `project.repoRoot`.
+- Update DB schema: rename `worktree_path` to `workspace_path` and drop `worktree_root` from the projects table.
+- Use `execa` for git operations in `project.repoRoot`.
 - Validate `project.repoRoot` exists and is a git repo.
-- Create or reuse `project.worktreeRoot`.
-- Ensure the configured `devBranch` exists locally.
+- Ensure the configured `devBranch` exists locally. Create it from `defaultBranch` if missing.
+- Checkout `devBranch` in the repo.
 - Fetch remote refs when possible, but do not make network fetch failures fatal unless needed for correctness.
-- Before each run, ensure the worktree is clean.
+- Before each run, ensure the checkout is clean.
 - Rebase `devBranch` onto `defaultBranch`.
 - Return `blocked` with `rebase_conflict` on rebase conflicts.
 - Return `blocked` with `dirty_workspace` on uncommitted changes.
-- Add cleanup support for an operator-requested worktree cleanup.
+- Return `workspace.path` as `project.repoRoot` (the repo itself, not a worktree).
 
 Done when:
 
-- Runs execute in a real worktree path instead of a temp/stub path.
+- Runs execute in the real repo on the `dev` branch.
 - Existing API/CLI run flow still works.
-- `POST /workspaces/:project/:issue/cleanup` or an equivalent cleanup endpoint exists.
-- CLI has `loom cleanup`.
-- Tests cover create, reuse, dirty workspace, rebase conflict, and cleanup.
+- Tests cover branch creation, reuse, dirty workspace, rebase conflict, and clean checkout.
+- `pnpm run build && pnpm run test && pnpm run lint && pnpm run format` pass.
 
 ## Phase 3: Linear Client
 
@@ -225,68 +224,77 @@ Done when:
 - Timeout behavior is shared by verifier, builder, and reviewer runners.
 - Restart recovery still passes after retry/cancel changes.
 
-## Phase 7: Real Codex Builder Runner
+## Phase 7: Real Codex Builder And Claude Reviewer Runners
 
-Goal: replace the stub builder with Codex CLI execution for implementation and
-push phases.
+Goal: replace the stub builder and reviewer with real child-process runners that
+spawn Codex and Claude in the project repo on the `dev` branch.
+
+Both runners share a common pattern: spawn a CLI child process in the repo,
+pass a prompt, capture stdout/stderr to artifacts, parse structured output, and
+enforce a wall-clock timeout. Extract a shared process-runner harness and build
+both runners on top of it.
 
 Files to add or change:
 
+- `src/runners/process-runner.ts` (shared harness: spawn, capture, timeout, kill)
 - `src/runners/codex-builder-runner.ts`
-- `src/runners/prompts/builder.ts`
-- `src/runners/index.ts`
-- `src/app/runtime.ts`
-- `tests/runners/codex-builder-runner.test.ts`
-
-Implementation:
-
-- Spawn `codex` in the issue worktree.
-- Use `--approval-mode full-auto`.
-- Pass the prompt via stdin or a supported prompt flag.
-- Build prompt must include issue snapshot, acceptance criteria, current run context, revision findings, verification failures, and git rules.
-- Build phase must instruct Codex to commit but not push.
-- Push phase must instruct Codex to push only the configured `devBranch`.
-- Capture stdout/stderr to artifacts.
-- Parse or derive `BuilderResult`.
-- Validate that a new commit exists after build success.
-- Validate that remote is up to date after push success.
-- Timeout and kill child process on wall-clock timeout.
-
-Done when:
-
-- A real local repo issue can reach `ready_for_ship` using Codex plus the real verifier.
-- Tests use a fake `codex` executable or process harness and cover success, failure, timeout, missing commit, and push failure.
-
-## Phase 8: Real Claude Reviewer Runner
-
-Goal: replace the stub reviewer with Claude Code review execution.
-
-Files to add or change:
-
 - `src/runners/claude-reviewer-runner.ts`
+- `src/runners/prompts/builder.ts`
 - `src/runners/prompts/reviewer.ts`
 - `src/runners/index.ts`
 - `src/app/runtime.ts`
+- `tests/runners/process-runner.test.ts`
+- `tests/runners/codex-builder-runner.test.ts`
 - `tests/runners/claude-reviewer-runner.test.ts`
 
-Implementation:
+### Shared process-runner harness
 
-- Spawn `claude` in the issue worktree.
+- Spawn a child process via `execa` in a given cwd.
+- Capture stdout and stderr to artifact paths.
+- Enforce a wall-clock timeout from project config. Kill the child on timeout.
+- Record partial logs when a process is killed.
+- Return raw output for the caller to parse.
+
+### Codex builder
+
+- Spawn `codex` in the project repo on the `dev` branch.
+- Use `--approval-mode full-auto`.
+- Pass the prompt via stdin or a supported prompt flag.
+- Build prompt must include issue snapshot, acceptance criteria, current run
+  context, revision findings, verification failures, and git rules. Reference
+  the builder prompt contract in `docs/dev-build-skill-v2.md` for the prompt
+  structure.
+- Build phase must instruct Codex to commit but not push.
+- Push phase must instruct Codex to push only the configured `devBranch`.
+- Parse or derive `BuilderResult`.
+- Validate that a new commit exists after build success.
+- Validate that remote is up to date after push success.
+
+### Claude reviewer
+
+- Spawn `claude` in the project repo on the `dev` branch.
 - Use `--dangerously-skip-permissions`.
 - Review prompt must be read-only by contract.
 - Include issue snapshot, diff, verification evidence, and review rubric.
+  Reference the reviewer prompt contract in `docs/dev-build-skill-v2.md` for
+  the prompt structure and finding severity levels.
 - Require P0/P1/P2 findings in structured output.
 - Parse output into `ReviewResult`.
 - Treat malformed output as `failed` with `runner_error`.
-- Timeout and kill child process on wall-clock timeout.
 
 Done when:
 
+- A real local repo issue can reach `ready_for_ship` using Codex builder plus
+  the real verifier plus Claude reviewer.
 - Review findings drive the existing revision loop.
 - Passing review moves the run to `ready_for_ship`.
-- Tests cover pass, revise findings, blocked findings, malformed output, and timeout.
+- Tests use a fake executable or process harness and cover: builder success,
+  builder failure, builder timeout, missing commit, push failure, reviewer
+  pass, reviewer revise findings, reviewer blocked, malformed output, and
+  reviewer timeout.
+- `pnpm run build && pnpm run test && pnpm run lint && pnpm run format` pass.
 
-## Phase 9: End-To-End Local Exercise
+## Phase 8: End-To-End Local Exercise
 
 Goal: prove Loom can run a real project through the whole loop.
 
@@ -295,7 +303,7 @@ Implementation:
 - Create a small fixture repo or use a harmless local project.
 - Configure Loom with real verification commands.
 - Submit an issue ID backed by a real or mocked Linear issue.
-- Run through worktree prep, Codex build, verification, Claude review, push, and handoff.
+- Run through workspace prep, Codex build, verification, Claude review, push, and handoff.
 - Document exact commands and observed outputs in `docs/loom-v1-e2e-notes.md`.
 
 Done when:
@@ -304,7 +312,7 @@ Done when:
 - `handoff.json` contains changed files, commit SHA, verification results, review result, branch, and recommended next action.
 - OpenClaw can poll or fetch the final state through MCP or HTTP.
 
-## Phase 10: Launchd Integration
+## Phase 9: Launchd Integration
 
 Goal: make `loomd` start reliably with the local operator environment.
 
