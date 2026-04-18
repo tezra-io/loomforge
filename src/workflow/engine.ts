@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { ProjectConfig } from "../config/index.js";
+import { LinearAuthError } from "../linear/index.js";
 import type {
   BlockedReason,
   BuilderResult,
@@ -134,6 +135,13 @@ export class WorkflowEngine {
       this.persistRun(run);
       await this.prepareAndBuild(run, project, issue);
     } catch (error) {
+      if (error instanceof LinearAuthError) {
+        this.transitionRun(run, "blocked", {
+          failureReason: "runner_auth_missing",
+          details: { error: error.message },
+        });
+        return;
+      }
       this.failInterruptedRun(run, error);
     }
   }
@@ -411,7 +419,15 @@ export class WorkflowEngine {
     this.transitionRun(run, state, options);
     const statusName = linearStatusForState(project, state);
     if (statusName) {
-      await this.options.linear.updateIssueStatus(project, issue, statusName);
+      try {
+        await this.options.linear.updateIssueStatus(project, issue, statusName);
+      } catch (error: unknown) {
+        this.recordEvent(run, "linear_sync_failed", state, {
+          statusName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.persistRun(run);
+      }
     }
   }
 

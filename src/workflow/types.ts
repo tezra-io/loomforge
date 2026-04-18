@@ -120,7 +120,7 @@ export interface RunAttemptRecord {
 export interface RunEvent {
   id: string;
   runId: string;
-  type: "state_transition" | "attempt_created" | "revision_requested";
+  type: "state_transition" | "attempt_created" | "revision_requested" | "linear_sync_failed";
   state: RunState;
   createdAt: string;
   details: Record<string, unknown>;
