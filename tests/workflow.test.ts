@@ -156,6 +156,7 @@ function createEngine(
     },
     worktrees: {
       prepareWorkspace: async () => options.prepareResult ?? { outcome: "success", workspace },
+      cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
     },
     builder: {
       build: async (context) => {
@@ -383,5 +384,124 @@ describe("workflow engine", () => {
     } finally {
       store.close();
     }
+  });
+
+  it("retries a blocked run and resets all attempt state", async () => {
+    const { engine } = createEngine({
+      prepareResult: {
+        outcome: "blocked",
+        reason: "dirty_workspace",
+        summary: "workspace dirty",
+      },
+    });
+    const runId = submitRun(engine);
+    await engine.drainQueue();
+
+    const blocked = engine.getRun(runId);
+    expect(blocked.state).toBe("blocked");
+
+    const retried = engine.retryRun(runId);
+    expect(retried.state).toBe("queued");
+    expect(retried.queuePosition).toBe(1);
+    expect(retried.failureReason).toBeNull();
+    expect(retried.revisionCount).toBe(0);
+    expect(retried.attempts).toHaveLength(0);
+    expect(retried.handoff).toBeNull();
+    expect(retried.workspace).toBeNull();
+
+    const retryEvent = retried.events.at(-1);
+    expect(retryEvent).toMatchObject({
+      state: "queued",
+      details: { retryFromState: "blocked" },
+    });
+  });
+
+  it("throws when retrying a queued run", () => {
+    const { engine } = createEngine();
+    const runId = submitRun(engine);
+    expect(() => engine.retryRun(runId)).toThrow("Cannot retry run in state: queued");
+  });
+
+  it("throws when retrying a shipped run", async () => {
+    const { engine } = createEngine();
+    const runId = submitRun(engine);
+    await engine.drainQueue();
+    expect(engine.getRun(runId).state).toBe("shipped");
+    expect(() => engine.retryRun(runId)).toThrow("Cannot retry run in state: shipped");
+  });
+
+  it("throws when retrying a cancelled run", () => {
+    const { engine } = createEngine();
+    const runId = submitRun(engine);
+    engine.cancelRun(runId);
+    expect(() => engine.retryRun(runId)).toThrow("Cannot retry run in state: cancelled");
+  });
+
+  it("retried run executes successfully through the full workflow", async () => {
+    let prepareCount = 0;
+    const newId = createIds();
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      newId,
+      now: createClock(),
+      linear: {
+        fetchIssue: async () => issue,
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => {
+          prepareCount += 1;
+          if (prepareCount === 1) {
+            return {
+              outcome: "blocked" as const,
+              reason: "dirty_workspace" as const,
+              summary: "workspace dirty",
+            };
+          }
+          return { outcome: "success" as const, workspace };
+        },
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => builderSuccess("sha-retry"),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+      verifier: { verify: async () => verificationPass() },
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const runId = submitRun(engine);
+    await engine.drainQueue();
+    expect(engine.getRun(runId).state).toBe("blocked");
+
+    engine.retryRun(runId);
+    await engine.drainQueue();
+
+    const run = engine.getRun(runId);
+    expect(run.state).toBe("shipped");
+    expect(run.attempts).toHaveLength(1);
+    expect(prepareCount).toBe(2);
+  });
+
+  it("cancels a queued run immediately", () => {
+    const { engine } = createEngine();
+    const runId = submitRun(engine);
+
+    const cancelled = engine.cancelRun(runId);
+    expect(cancelled.state).toBe("cancelled");
+    expect(cancelled.failureReason).toBe("operator_cancel");
+    expect(engine.getQueue()).toHaveLength(0);
+  });
+
+  it("cancel is idempotent on terminal runs", async () => {
+    const { engine } = createEngine();
+    const runId = submitRun(engine);
+    await engine.drainQueue();
+
+    const run = engine.getRun(runId);
+    expect(run.state).toBe("shipped");
+
+    const result = engine.cancelRun(runId);
+    expect(result.state).toBe("shipped");
   });
 });

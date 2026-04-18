@@ -82,7 +82,7 @@ export interface VerificationResult {
   summary: string;
   rawLogPath: string;
   commandResults: VerificationCommandResult[];
-  failureReason?: "verification_failed" | "env_failure";
+  failureReason?: "verification_failed" | "env_failure" | "timeout";
 }
 
 export interface ReviewFinding {

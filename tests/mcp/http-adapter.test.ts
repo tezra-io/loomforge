@@ -53,7 +53,9 @@ beforeEach(async () => {
     logger: pino({ level: "silent" }),
   });
   await server.listen({ port: 0 });
-  const address = server.addresses()[0];
+  const addresses = server.addresses();
+  const address = addresses[0];
+  if (!address) throw new Error("Server did not bind to a port");
   adapter = createHttpAdapter({ baseUrl: `http://127.0.0.1:${address.port}` });
 });
 
@@ -101,6 +103,13 @@ describe("HTTP adapter integration", () => {
       run: { id: string; state: string };
     };
     expect(result.run.state).toBe("cancelled");
+  });
+
+  it("retryRun throws for a queued run", async () => {
+    const submitted = (await adapter.submitRun("loom", "TEZ-1")) as {
+      run: { id: string };
+    };
+    await expect(adapter.retryRun(submitted.run.id)).rejects.toThrow();
   });
 
   it("cleanupWorkspace succeeds with stub workspace manager", async () => {

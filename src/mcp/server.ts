@@ -50,6 +50,15 @@ export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
   );
 
   mcp.tool(
+    "loom_retry_run",
+    "Retry a failed or blocked run",
+    { runId: z.string().min(1).describe("Run ID to retry") },
+    async ({ runId }) => {
+      return safeCall(() => adapter.retryRun(runId));
+    },
+  );
+
+  mcp.tool(
     "loom_cleanup_workspace",
     "Reset project workspace to clean state on the default branch",
     { projectSlug: z.string().min(1).describe("Project slug from loom config") },

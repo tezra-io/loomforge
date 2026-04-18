@@ -9,6 +9,7 @@ import type {
   VerificationRunner as IVerificationRunner,
   WorkflowStepContext,
 } from "../workflow/types.js";
+import { isExecaTimedOut, isTimedOut } from "./timeout.js";
 
 export interface VerificationRunnerOptions {
   artifactDir: string;
@@ -68,6 +69,19 @@ export class VerificationRunner implements IVerificationRunner {
 
         await writeFile(logPath, logContent, "utf8");
 
+        if (isExecaTimedOut(result)) {
+          return {
+            outcome: "fail",
+            summary: `Command "${cmd.name}" timed out after ${cmd.timeoutMs}ms`,
+            rawLogPath: logPath,
+            commandResults: [
+              ...commandResults,
+              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
+            ],
+            failureReason: "timeout",
+          };
+        }
+
         if (isEnvFailure(exitCode, result.stderr)) {
           return {
             outcome: "blocked",
@@ -95,6 +109,19 @@ export class VerificationRunner implements IVerificationRunner {
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         await writeFile(logPath, `error: ${message}`, "utf8");
+
+        if (isTimedOut(error)) {
+          return {
+            outcome: "fail",
+            summary: `Command "${cmd.name}" timed out after ${cmd.timeoutMs}ms`,
+            rawLogPath: logPath,
+            commandResults: [
+              ...commandResults,
+              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
+            ],
+            failureReason: "timeout",
+          };
+        }
 
         if (isSpawnError(error)) {
           return {

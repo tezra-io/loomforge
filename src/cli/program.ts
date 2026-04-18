@@ -117,6 +117,22 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
     });
 
   program
+    .command("retry")
+    .description("Retry a failed or blocked run")
+    .argument("<runId>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (runId: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "POST",
+          `/runs/${encodeURIComponent(runId)}/retry`,
+        ),
+      );
+    });
+
+  program
     .command("mcp-serve")
     .description("Start a stdio MCP server that proxies to the running daemon")
     .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())

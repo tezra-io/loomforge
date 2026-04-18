@@ -28,15 +28,30 @@ projects:
   );
 }
 
-function createTestServer(options?: { store?: SqliteRunStore; artifactStore?: ArtifactStore }) {
+function createTestServer(options?: {
+  store?: SqliteRunStore;
+  artifactStore?: ArtifactStore;
+  blockWorkspace?: boolean;
+}) {
   let scheduled = 0;
   const dependencies = createStubWorkflowDependencies();
+  const worktrees = options?.blockWorkspace
+    ? {
+        ...dependencies.worktrees,
+        prepareWorkspace: async () =>
+          ({
+            outcome: "blocked" as const,
+            reason: "dirty_workspace" as const,
+            summary: "workspace dirty",
+          }) as const,
+      }
+    : dependencies.worktrees;
   const engine = new WorkflowEngine({
     registry: createRegistry(),
     store: options?.store,
     artifacts: options?.artifactStore,
     linear: dependencies.linear,
-    worktrees: dependencies.worktrees,
+    worktrees,
     builder: dependencies.builder,
     verifier: dependencies.verifier,
     reviewer: dependencies.reviewer,
@@ -173,6 +188,79 @@ describe("api server", () => {
           failureReason: "operator_cancel",
         },
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("retries a blocked run and schedules draining", async () => {
+    const { getScheduledCount, scheduler, server } = createTestServer({ blockWorkspace: true });
+
+    try {
+      const submitted = await server.inject({
+        method: "POST",
+        url: "/runs",
+        payload: {
+          projectSlug: "loom",
+          issueId: "TEZ-1",
+          executionMode: "enqueue",
+        },
+      });
+      const runId = submitted.json<{ run: { id: string } }>().run.id;
+      await scheduler.drainNow();
+
+      const fetched = await server.inject({ method: "GET", url: `/runs/${runId}` });
+      expect(fetched.json<{ run: { state: string } }>().run.state).toBe("blocked");
+
+      const retried = await server.inject({
+        method: "POST",
+        url: `/runs/${runId}/retry`,
+      });
+
+      expect(retried.statusCode).toBe(200);
+      expect(retried.json()).toMatchObject({
+        run: { id: runId, state: "queued" },
+      });
+      expect(getScheduledCount()).toBe(2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 409 when retrying a non-terminal run", async () => {
+    const { server } = createTestServer();
+
+    try {
+      const submitted = await server.inject({
+        method: "POST",
+        url: "/runs",
+        payload: {
+          projectSlug: "loom",
+          issueId: "TEZ-1",
+          executionMode: "enqueue",
+        },
+      });
+      const runId = submitted.json<{ run: { id: string } }>().run.id;
+      const retried = await server.inject({
+        method: "POST",
+        url: `/runs/${runId}/retry`,
+      });
+
+      expect(retried.statusCode).toBe(409);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 404 when retrying a nonexistent run", async () => {
+    const { server } = createTestServer();
+
+    try {
+      const retried = await server.inject({
+        method: "POST",
+        url: "/runs/nonexistent/retry",
+      });
+      expect(retried.statusCode).toBe(404);
     } finally {
       await server.close();
     }

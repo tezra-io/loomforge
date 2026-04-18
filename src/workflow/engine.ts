@@ -84,9 +84,34 @@ export class WorkflowEngine {
     if (isTerminalState(run.state)) {
       return run;
     }
+    if (run.id === this.activeRunId) {
+      throw new Error("Cannot cancel an active run; wait for it to finish or restart the daemon");
+    }
 
     this.removeFromQueue(run.id);
     this.transitionRun(run, "cancelled", { failureReason: reason });
+    return run;
+  }
+
+  retryRun(runId: string): RunRecord {
+    const run = this.getRun(runId);
+    if (run.state !== "failed" && run.state !== "blocked") {
+      throw new Error(`Cannot retry run in state: ${run.state}`);
+    }
+
+    const previousState = run.state;
+    run.state = "queued";
+    run.failureReason = null;
+    run.queuePosition = null;
+    run.revisionCount = 0;
+    run.attempts = [];
+    run.handoff = null;
+    run.workspace = null;
+    run.updatedAt = this.now();
+    this.recordEvent(run, "state_transition", "queued", { retryFromState: previousState });
+    this.queue.push(run.id);
+    this.refreshQueuePositions();
+    this.persistRun(run);
     return run;
   }
 
@@ -240,6 +265,12 @@ export class WorkflowEngine {
       return "terminal";
     }
     if (verification.outcome === "fail") {
+      if (verification.failureReason === "timeout") {
+        await this.finishFailed(run, project, issue, "timeout", {
+          summary: verification.summary,
+        });
+        return "terminal";
+      }
       return await this.reviseOrFailVerification(run, project, issue, attempt, verification);
     }
 

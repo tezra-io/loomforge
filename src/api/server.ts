@@ -96,6 +96,25 @@ export function createApiServer(options: CreateApiServerOptions) {
     }
   });
 
+  server.post("/runs/:id/retry", async (request, reply) => {
+    const parsed = runIdParamSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      const run = options.engine.retryRun(parsed.data.id);
+      options.scheduler.schedule();
+      return { run };
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message.includes("Unknown run")) {
+        return reply.code(404).send({ error: "run_not_found" });
+      }
+      return reply.code(409).send({ error: message });
+    }
+  });
+
   server.post("/workspace/cleanup", async (request, reply) => {
     const parsed = cleanupWorkspaceSchema.safeParse(request.body);
     if (!parsed.success) {

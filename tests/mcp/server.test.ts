@@ -15,9 +15,17 @@ function stubAdapter(overrides: Partial<LoomHttpAdapter> = {}): LoomHttpAdapter 
     }),
     getRun: async () => ({ run: { id: "run-1", state: "shipped" } }),
     cancelRun: async () => ({ run: { id: "run-1", state: "cancelled" } }),
+    retryRun: async () => ({ run: { id: "run-1", state: "queued" } }),
     cleanupWorkspace: async () => ({ outcome: "success", summary: "Workspace cleaned" }),
     ...overrides,
   };
+}
+
+function parseToolText(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
+  const content = result.content as Array<{ type: string; text: string }>;
+  const first = content[0];
+  if (!first) throw new Error("Empty tool result content");
+  return JSON.parse(first.text) as unknown;
 }
 
 let client: Client;
@@ -54,20 +62,19 @@ describe("MCP server tools", () => {
       "loom_get_queue",
       "loom_get_run",
       "loom_health",
+      "loom_retry_run",
       "loom_submit_run",
     ]);
   });
 
   it("loom_health returns daemon status", async () => {
     const result = await client.callTool({ name: "loom_health", arguments: {} });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
-    expect(parsed).toEqual({ status: "ok", queueDepth: 0 });
+    expect(parseToolText(result)).toEqual({ status: "ok", queueDepth: 0 });
   });
 
   it("loom_get_queue returns queue data", async () => {
     const result = await client.callTool({ name: "loom_get_queue", arguments: {} });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
-    expect(parsed).toEqual({ data: [] });
+    expect(parseToolText(result)).toEqual({ data: [] });
   });
 
   it("loom_submit_run passes arguments to adapter", async () => {
@@ -94,7 +101,7 @@ describe("MCP server tools", () => {
         executionMode: "run_now_if_idle",
       },
     });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { run: { id: string } };
     expect(parsed.run.id).toBe("run-2");
     expect(captured).toEqual({
       projectSlug: "loom",
@@ -108,7 +115,7 @@ describe("MCP server tools", () => {
       name: "loom_get_run",
       arguments: { runId: "run-1" },
     });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { run: { state: string } };
     expect(parsed.run.state).toBe("shipped");
   });
 
@@ -117,8 +124,17 @@ describe("MCP server tools", () => {
       name: "loom_cancel_run",
       arguments: { runId: "run-1" },
     });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { run: { state: string } };
     expect(parsed.run.state).toBe("cancelled");
+  });
+
+  it("loom_retry_run retries a run", async () => {
+    const result = await client.callTool({
+      name: "loom_retry_run",
+      arguments: { runId: "run-1" },
+    });
+    const parsed = parseToolText(result) as { run: { state: string } };
+    expect(parsed.run.state).toBe("queued");
   });
 
   it("loom_cleanup_workspace cleans workspace", async () => {
@@ -126,7 +142,7 @@ describe("MCP server tools", () => {
       name: "loom_cleanup_workspace",
       arguments: { projectSlug: "loom" },
     });
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { outcome: string };
     expect(parsed.outcome).toBe("success");
   });
 });
@@ -173,7 +189,7 @@ describe("MCP server error handling", () => {
 
     const result = await client.callTool({ name: "loom_health", arguments: {} });
     expect(result.isError).toBe(true);
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { error: string };
     expect(parsed.error).toBe("connection refused");
   });
 
@@ -191,7 +207,7 @@ describe("MCP server error handling", () => {
       arguments: { runId: "missing" },
     });
     expect(result.isError).toBe(true);
-    const parsed = JSON.parse((result.content as Array<{ text: string }>)[0].text);
+    const parsed = parseToolText(result) as { error: string };
     expect(parsed.error).toBe("run_not_found");
   });
 });
