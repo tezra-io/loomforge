@@ -229,11 +229,38 @@ export interface ReviewerRunner {
   review(context: WorkflowStepContext): Promise<ReviewResult>;
 }
 
+export interface ArtifactMeta {
+  kind: string;
+  path: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ArtifactWriter {
+  writeIssueSnapshot(runId: string, snapshot: IssueSnapshot): Promise<ArtifactMeta>;
+  writeHandoff(runId: string, handoff: RunHandoff): Promise<ArtifactMeta>;
+}
+
 export interface WorkflowRunStore {
   saveProject(project: ProjectConfig): void;
   saveRun(run: RunRecord): void;
   getRun(runId: string): RunRecord | null;
   listRecoverableRuns(): RunRecord[];
+  saveArtifact(artifact: {
+    id: string;
+    runId: string;
+    kind: string;
+    path: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }): void;
+  listArtifacts(runId: string): Array<{
+    id: string;
+    runId: string;
+    kind: string;
+    path: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }>;
 }
 
 export interface WorkflowEngineOptions {
@@ -244,6 +271,7 @@ export interface WorkflowEngineOptions {
   verifier: VerificationRunner;
   reviewer: ReviewerRunner;
   store?: WorkflowRunStore;
+  artifacts?: ArtifactWriter;
   newId?: () => string;
   now?: () => string;
 }

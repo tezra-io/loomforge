@@ -2,7 +2,9 @@ import Fastify from "fastify";
 import type { Logger } from "pino";
 import { z } from "zod";
 
+import type { ArtifactStore } from "../artifacts/index.js";
 import type { DrainScheduler } from "../app/drain-scheduler.js";
+import type { SqliteRunStore } from "../db/index.js";
 import type { WorkflowEngine } from "../workflow/index.js";
 
 const submitRunSchema = z
@@ -22,6 +24,8 @@ const runIdParamSchema = z
 export interface CreateApiServerOptions {
   engine: WorkflowEngine;
   scheduler: DrainScheduler;
+  store?: SqliteRunStore;
+  artifactStore?: ArtifactStore;
   logger: Logger;
 }
 
@@ -84,6 +88,58 @@ export function createApiServer(options: CreateApiServerOptions) {
     } catch {
       return reply.code(404).send({ error: "run_not_found" });
     }
+  });
+
+  server.get("/runs/:id/artifacts", async (request, reply) => {
+    const parsed = runIdParamSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    if (!options.store) {
+      return reply.code(501).send({ error: "artifact_store_unavailable" });
+    }
+
+    try {
+      options.engine.getRun(parsed.data.id);
+    } catch {
+      return reply.code(404).send({ error: "run_not_found" });
+    }
+
+    const artifacts = options.store.listArtifacts(parsed.data.id);
+    return { artifacts };
+  });
+
+  server.get("/runs/:id/logs", async (request, reply) => {
+    const parsed = runIdParamSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    const { store: runStore, artifactStore: artStore } = options;
+    if (!runStore || !artStore) {
+      return reply.code(501).send({ error: "artifact_store_unavailable" });
+    }
+
+    try {
+      options.engine.getRun(parsed.data.id);
+    } catch {
+      return reply.code(404).send({ error: "run_not_found" });
+    }
+
+    const artifacts = runStore.listArtifacts(parsed.data.id);
+    const logArtifacts = artifacts.filter(
+      (a) => a.kind === "issue_snapshot" || a.kind === "handoff",
+    );
+    const logs = await Promise.all(
+      logArtifacts.map(async (a) => ({
+        id: a.id,
+        kind: a.kind,
+        content: await artStore.readContent(a.path),
+      })),
+    );
+
+    return { logs: logs.filter((l) => l.content !== null) };
   });
 
   return server;

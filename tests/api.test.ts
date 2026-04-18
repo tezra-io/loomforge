@@ -1,9 +1,14 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import pino from "pino";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
 import { createApiServer } from "../src/api/index.js";
 import { createStubWorkflowDependencies } from "../src/app/index.js";
+import { ArtifactStore } from "../src/artifacts/index.js";
 import { parseProjectConfigRegistry } from "../src/config/index.js";
+import { SqliteRunStore } from "../src/db/index.js";
 import { WorkflowEngine } from "../src/workflow/index.js";
 import type { DrainScheduler } from "../src/app/index.js";
 
@@ -23,11 +28,13 @@ projects:
   );
 }
 
-function createTestServer() {
+function createTestServer(options?: { store?: SqliteRunStore; artifactStore?: ArtifactStore }) {
   let scheduled = 0;
   const dependencies = createStubWorkflowDependencies();
   const engine = new WorkflowEngine({
     registry: createRegistry(),
+    store: options?.store,
+    artifacts: options?.artifactStore,
     linear: dependencies.linear,
     worktrees: dependencies.worktrees,
     builder: dependencies.builder,
@@ -45,6 +52,8 @@ function createTestServer() {
   const server = createApiServer({
     engine,
     scheduler,
+    store: options?.store,
+    artifactStore: options?.artifactStore,
     logger: pino({ level: "silent" }),
   });
 
@@ -180,6 +189,121 @@ describe("api server", () => {
       expect(health.json()).toEqual({ status: "ok", queueDepth: 0 });
       expect(queue.statusCode).toBe(200);
       expect(queue.json()).toEqual({ data: [] });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("artifact and log endpoints", () => {
+  let tmpDir: string;
+  let store: SqliteRunStore;
+  let artifactStore: ArtifactStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "loom-api-artifacts-"));
+    store = SqliteRunStore.open(":memory:");
+    artifactStore = new ArtifactStore(tmpDir);
+  });
+
+  afterEach(async () => {
+    store.close();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("lists artifacts for a shipped run", async () => {
+    const { scheduler, server } = createTestServer({ store, artifactStore });
+
+    try {
+      const submitted = await server.inject({
+        method: "POST",
+        url: "/runs",
+        payload: { projectSlug: "loom", issueId: "TEZ-1" },
+      });
+      const runId = submitted.json<{ run: { id: string } }>().run.id;
+      await scheduler.drainNow();
+
+      const response = await server.inject({
+        method: "GET",
+        url: `/runs/${runId}/artifacts`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{ artifacts: Array<{ kind: string; path: string }> }>();
+      expect(body.artifacts.length).toBeGreaterThanOrEqual(2);
+
+      const kinds = body.artifacts.map((a) => a.kind);
+      expect(kinds).toContain("issue_snapshot");
+      expect(kinds).toContain("handoff");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns logs content for a shipped run", async () => {
+    const { scheduler, server } = createTestServer({ store, artifactStore });
+
+    try {
+      const submitted = await server.inject({
+        method: "POST",
+        url: "/runs",
+        payload: { projectSlug: "loom", issueId: "TEZ-1" },
+      });
+      const runId = submitted.json<{ run: { id: string } }>().run.id;
+      await scheduler.drainNow();
+
+      const response = await server.inject({
+        method: "GET",
+        url: `/runs/${runId}/logs`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{
+        logs: Array<{ id: string; kind: string; content: string }>;
+      }>();
+      expect(body.logs.length).toBeGreaterThanOrEqual(1);
+
+      const snapshotLog = body.logs.find((l) => l.kind === "issue_snapshot");
+      expect(snapshotLog).toBeDefined();
+      const parsed = JSON.parse(snapshotLog?.content ?? "{}");
+      expect(parsed.identifier).toBe("TEZ-1");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 404 for artifacts of nonexistent run", async () => {
+    const { server } = createTestServer({ store, artifactStore });
+
+    try {
+      const response = await server.inject({
+        method: "GET",
+        url: "/runs/nonexistent/artifacts",
+      });
+      expect(response.statusCode).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns empty artifacts for a run with no artifacts", async () => {
+    const { server } = createTestServer({ store, artifactStore });
+
+    try {
+      const submitted = await server.inject({
+        method: "POST",
+        url: "/runs",
+        payload: { projectSlug: "loom", issueId: "TEZ-1" },
+      });
+      const runId = submitted.json<{ run: { id: string } }>().run.id;
+
+      const response = await server.inject({
+        method: "GET",
+        url: `/runs/${runId}/artifacts`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ artifacts: [] });
     } finally {
       await server.close();
     }

@@ -53,6 +53,8 @@ export async function startLoomServer(options: StartServerOptions): Promise<Runn
   const server = createApiServer({
     engine: runtime.engine,
     scheduler: runtime.scheduler,
+    store: runtime.store,
+    artifactStore: runtime.artifactStore,
     logger,
   });
   const url = await server.listen({ host: options.host, port: options.port });

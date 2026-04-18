@@ -95,6 +95,49 @@ export class SqliteRunStore implements WorkflowRunStore {
       .map((row) => this.toRun(row));
   }
 
+  saveArtifact(artifact: {
+    id: string;
+    runId: string;
+    kind: string;
+    path: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT OR REPLACE INTO artifacts (id, run_id, kind, path, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        artifact.id,
+        artifact.runId,
+        artifact.kind,
+        artifact.path,
+        JSON.stringify(artifact.metadata),
+        artifact.createdAt,
+      );
+  }
+
+  listArtifacts(runId: string): Array<{
+    id: string;
+    runId: string;
+    kind: string;
+    path: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    return this.db
+      .prepare("SELECT * FROM artifacts WHERE run_id = ? ORDER BY created_at ASC")
+      .all(runId)
+      .map((row) => ({
+        id: readString(row, "id"),
+        runId: readString(row, "run_id"),
+        kind: readString(row, "kind"),
+        path: readString(row, "path"),
+        metadata: readJson<Record<string, unknown>>(row, "metadata_json") ?? {},
+        createdAt: readString(row, "created_at"),
+      }));
+  }
+
   listRecoverableRuns(): RunRecord[] {
     return this.db
       .prepare(
@@ -210,11 +253,9 @@ export class SqliteRunStore implements WorkflowRunStore {
     for (const event of run.events) {
       this.insertEvent(event);
     }
-    this.insertHandoffArtifact(run);
   }
 
   private deleteRunChildren(runId: string): void {
-    this.db.prepare("DELETE FROM artifacts WHERE run_id = ?").run(runId);
     this.db.prepare("DELETE FROM events WHERE run_id = ?").run(runId);
     this.db.prepare("DELETE FROM workspaces WHERE run_id = ?").run(runId);
     this.db.prepare("DELETE FROM run_attempts WHERE run_id = ?").run(runId);
@@ -323,25 +364,6 @@ export class SqliteRunStore implements WorkflowRunStore {
         event.state,
         event.createdAt,
         JSON.stringify(event.details),
-      );
-  }
-
-  private insertHandoffArtifact(run: RunRecord): void {
-    if (!run.handoff) {
-      return;
-    }
-
-    this.db
-      .prepare(
-        "INSERT INTO artifacts (id, run_id, kind, path, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        `${run.id}:handoff`,
-        run.id,
-        "handoff",
-        `${run.id}/handoff.json`,
-        JSON.stringify({ version: run.handoff.version }),
-        run.updatedAt,
       );
   }
 

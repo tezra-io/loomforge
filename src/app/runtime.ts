@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import pino, { type Logger } from "pino";
 
+import { ArtifactStore } from "../artifacts/index.js";
 import type { GlobalConfig, ProjectConfigRegistry } from "../config/index.js";
 import { SqliteRunStore } from "../db/index.js";
 import { LinearWorkflowClientImpl, createMissingKeyClient } from "../linear/index.js";
@@ -15,6 +16,7 @@ export interface LoomRuntime {
   engine: WorkflowEngine;
   scheduler: DrainScheduler;
   store: SqliteRunStore;
+  artifactStore: ArtifactStore;
   logger: Logger;
   close(): void;
 }
@@ -37,9 +39,11 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   const linear = options.globalConfig
     ? new LinearWorkflowClientImpl(options.globalConfig.linear.apiKey)
     : createMissingKeyClient();
+  const artifacts = new ArtifactStore(options.registry.runtime.dataRoot);
   const engine = new WorkflowEngine({
     registry: options.registry,
     store,
+    artifacts,
     linear,
     worktrees,
     builder: stubs.builder,
@@ -52,6 +56,7 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
     engine,
     scheduler,
     store,
+    artifactStore: artifacts,
     logger,
     close: () => {
       store.close();

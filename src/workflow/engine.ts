@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { ProjectConfig } from "../config/index.js";
 import { LinearAuthError } from "../linear/index.js";
 import type {
+  ArtifactMeta,
+  ArtifactWriter,
   BlockedReason,
   BuilderResult,
   CancelReason,
@@ -133,6 +135,7 @@ export class WorkflowEngine {
       const issue = await this.options.linear.fetchIssue(project, run.issueId);
       run.issueSnapshot = issue;
       this.persistRun(run);
+      await this.writeArtifact(run, "issue_snapshot", (w) => w.writeIssueSnapshot(run.id, issue));
       await this.prepareAndBuild(run, project, issue);
     } catch (error) {
       if (error instanceof LinearAuthError) {
@@ -350,8 +353,10 @@ export class WorkflowEngine {
       return;
     }
 
-    run.handoff = this.buildHandoff(run, project, workspace);
+    const handoff = this.buildHandoff(run, project, workspace);
+    run.handoff = handoff;
     this.persistRun(run);
+    await this.writeArtifact(run, "handoff", (w) => w.writeHandoff(run.id, handoff));
     await this.transitionAndSync(run, project, issue, "shipped");
   }
 
@@ -579,6 +584,25 @@ export class WorkflowEngine {
 
   private persistRun(run: RunRecord): void {
     this.options.store?.saveRun(run);
+  }
+
+  private async writeArtifact(
+    run: RunRecord,
+    idSuffix: string,
+    write: (w: ArtifactWriter) => Promise<ArtifactMeta>,
+  ): Promise<void> {
+    if (!this.options.artifacts) {
+      return;
+    }
+    const meta = await write(this.options.artifacts);
+    this.options.store?.saveArtifact({
+      id: `${run.id}:${idSuffix}`,
+      runId: run.id,
+      kind: meta.kind,
+      path: meta.path,
+      metadata: meta.metadata,
+      createdAt: this.now(),
+    });
   }
 
   private recoverPersistedRuns(): void {
