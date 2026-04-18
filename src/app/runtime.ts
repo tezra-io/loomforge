@@ -6,11 +6,10 @@ import { ArtifactStore } from "../artifacts/index.js";
 import type { GlobalConfig, ProjectConfigRegistry } from "../config/index.js";
 import { SqliteRunStore } from "../db/index.js";
 import { LinearWorkflowClientImpl, createMissingKeyClient } from "../linear/index.js";
-import { VerificationRunner } from "../runners/index.js";
+import { CodexBuilderRunner, ClaudeReviewerRunner, VerificationRunner } from "../runners/index.js";
 import { WorkflowEngine } from "../workflow/index.js";
 import { GitWorkspaceManager } from "../worktrees/index.js";
 import { createDrainScheduler, type DrainScheduler } from "./drain-scheduler.js";
-import { createStubWorkflowDependencies } from "./stub-dependencies.js";
 
 export interface LoomRuntime {
   engine: WorkflowEngine;
@@ -32,9 +31,10 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   const logger = options.logger ?? pino();
   const dbPath = options.dbPath ?? join(options.registry.runtime.dataRoot, "loom.db");
   const store = SqliteRunStore.open(dbPath);
-  const stubs = createStubWorkflowDependencies();
   const artifactDir = join(options.registry.runtime.dataRoot, "artifacts");
   const verifier = new VerificationRunner({ artifactDir });
+  const builder = new CodexBuilderRunner({ artifactDir });
+  const reviewer = new ClaudeReviewerRunner({ artifactDir });
   const worktrees = new GitWorkspaceManager();
   const linear = options.globalConfig
     ? new LinearWorkflowClientImpl(options.globalConfig.linear.apiKey)
@@ -46,9 +46,9 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
     artifacts,
     linear,
     worktrees,
-    builder: stubs.builder,
+    builder,
     verifier,
-    reviewer: stubs.reviewer,
+    reviewer,
   });
   const scheduler = createDrainScheduler(engine, logger);
 
