@@ -39,6 +39,10 @@ export function createStubWorkflowDependencies(): StubWorkflowDependencies {
           branchName: project.devBranch,
         },
       }),
+      cleanupWorkspace: async () => ({
+        outcome: "success",
+        summary: "Workspace cleaned (stub)",
+      }),
     },
     builder: {
       build: async ({ attempt }) => ({

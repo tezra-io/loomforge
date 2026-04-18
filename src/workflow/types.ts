@@ -212,8 +212,14 @@ export interface LinearWorkflowClient {
   ): Promise<void>;
 }
 
+export interface CleanupWorkspaceResult {
+  outcome: "success" | "failed";
+  summary: string;
+}
+
 export interface WorktreeManager {
   prepareWorkspace(project: ProjectConfig, issue: IssueSnapshot): Promise<PrepareWorkspaceResult>;
+  cleanupWorkspace(project: ProjectConfig): Promise<CleanupWorkspaceResult>;
 }
 
 export interface BuilderRunner {

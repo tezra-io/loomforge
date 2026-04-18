@@ -2,8 +2,12 @@ import { resolve } from "node:path";
 
 import { Command } from "commander";
 
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
 import { VERSION } from "../index.js";
 import { startLoomServer } from "../app/server.js";
+import { createHttpAdapter } from "../mcp/http-adapter.js";
+import { createMcpServer } from "../mcp/server.js";
 import { requestJson } from "./http-client.js";
 
 export interface CreateCliProgramOptions {
@@ -110,6 +114,17 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
           `/runs/${encodeURIComponent(runId)}/cancel`,
         ),
       );
+    });
+
+  program
+    .command("mcp-serve")
+    .description("Start a stdio MCP server that proxies to the running daemon")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (commandOptions: UrlCommandOptions) => {
+      const adapter = createHttpAdapter({ baseUrl: commandOptions.url });
+      const mcp = createMcpServer(adapter);
+      const transport = new StdioServerTransport();
+      await mcp.connect(transport);
     });
 
   return program;

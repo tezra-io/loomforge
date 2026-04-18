@@ -15,6 +15,12 @@ const submitRunSchema = z
   })
   .strict();
 
+const cleanupWorkspaceSchema = z
+  .object({
+    projectSlug: z.string().trim().min(1),
+  })
+  .strict();
+
 const runIdParamSchema = z
   .object({
     id: z.string().trim().min(1),
@@ -87,6 +93,23 @@ export function createApiServer(options: CreateApiServerOptions) {
       return { run: options.engine.cancelRun(parsed.data.id) };
     } catch {
       return reply.code(404).send({ error: "run_not_found" });
+    }
+  });
+
+  server.post("/workspace/cleanup", async (request, reply) => {
+    const parsed = cleanupWorkspaceSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await options.engine.cleanupWorkspace(parsed.data.projectSlug);
+      if (result.outcome === "failed") {
+        return reply.code(422).send(result);
+      }
+      return result;
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
     }
   });
 

@@ -3,7 +3,12 @@ import { access } from "node:fs/promises";
 import { execa } from "execa";
 
 import type { ProjectConfig } from "../config/index.js";
-import type { IssueSnapshot, PrepareWorkspaceResult, WorktreeManager } from "../workflow/types.js";
+import type {
+  CleanupWorkspaceResult,
+  IssueSnapshot,
+  PrepareWorkspaceResult,
+  WorktreeManager,
+} from "../workflow/types.js";
 
 export class GitWorkspaceManager implements WorktreeManager {
   async prepareWorkspace(
@@ -100,6 +105,37 @@ export class GitWorkspaceManager implements WorktreeManager {
         branchName: project.devBranch,
       },
     };
+  }
+
+  async cleanupWorkspace(project: ProjectConfig): Promise<CleanupWorkspaceResult> {
+    const cwd = project.repoRoot;
+
+    try {
+      await access(cwd);
+    } catch {
+      return { outcome: "failed", summary: `Repo root does not exist: ${cwd}` };
+    }
+
+    const isRepo = await this.isGitRepo(cwd);
+    if (!isRepo) {
+      return { outcome: "failed", summary: `Not a git repository: ${cwd}` };
+    }
+
+    const checkoutResult = await execa("git", ["checkout", project.defaultBranch], {
+      cwd,
+      reject: false,
+    });
+    if (checkoutResult.exitCode !== 0) {
+      return {
+        outcome: "failed",
+        summary: `Failed to checkout ${project.defaultBranch}: ${checkoutResult.stderr}`,
+      };
+    }
+
+    await execa("git", ["clean", "-fd"], { cwd, reject: false });
+    await execa("git", ["checkout", "."], { cwd, reject: false });
+
+    return { outcome: "success", summary: `Workspace reset to ${project.defaultBranch}` };
   }
 
   private async isGitRepo(cwd: string): Promise<boolean> {

@@ -21,6 +21,7 @@ import type {
   SubmitRunInput,
   SubmitRunResult,
   VerificationResult,
+  CleanupWorkspaceResult,
   WorkflowEngineOptions,
   WorkflowStepContext,
   WorkspaceSnapshot,
@@ -87,6 +88,11 @@ export class WorkflowEngine {
     this.removeFromQueue(run.id);
     this.transitionRun(run, "cancelled", { failureReason: reason });
     return run;
+  }
+
+  async cleanupWorkspace(projectSlug: string): Promise<CleanupWorkspaceResult> {
+    const project = this.projectForSlug(projectSlug);
+    return this.options.worktrees.cleanupWorkspace(project);
   }
 
   async drainNext(): Promise<RunRecord | null> {
