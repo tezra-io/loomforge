@@ -56,7 +56,6 @@ const projectConfigSchema = z
     repoRoot: pathSchema,
     defaultBranch: nonEmptyStringSchema,
     devBranch: nonEmptyStringSchema.optional(),
-    worktreeRoot: pathSchema.optional(),
     runtimeDataRoot: pathSchema.optional(),
     verification: z
       .object({
@@ -132,7 +131,6 @@ export interface ProjectConfig {
   repoRoot: string;
   defaultBranch: string;
   devBranch: string;
-  worktreeRoot: string;
   runtimeDataRoot: string;
   verification: {
     commands: VerificationCommandConfig[];
@@ -290,10 +288,6 @@ function buildProjectConfig(
     repoRoot: resolveConfigPath(project.repoRoot, context.configDir),
     defaultBranch: project.defaultBranch,
     devBranch: project.devBranch ?? "dev",
-    worktreeRoot: resolveConfigPath(
-      project.worktreeRoot ?? join(context.homeDir, ".loom", "worktrees", project.slug),
-      context.configDir,
-    ),
     runtimeDataRoot: resolveConfigPath(
       project.runtimeDataRoot ?? join(context.dataRoot, "projects", project.slug),
       context.configDir,

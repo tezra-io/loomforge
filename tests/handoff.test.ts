@@ -7,7 +7,7 @@ const handoff: RunHandoff = {
   version: 1,
   runId: "run-1",
   status: "shipped",
-  worktreePath: "/Users/alice/.loom/worktrees/loom",
+  workspacePath: "/Users/alice/projects/loom",
   branchName: "dev",
   changedFiles: ["src/workflow/engine.ts"],
   commitShas: ["abc123"],

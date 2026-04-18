@@ -50,7 +50,6 @@ projects:
       repoRoot: "/repos/loom",
       defaultBranch: "main",
       devBranch: "develop",
-      worktreeRoot: "/Users/alice/.loom/worktrees/loom",
       runtimeDataRoot: "/Users/alice/.loom/data/projects/loom",
       timeouts: {
         builderMs: 1800000,
@@ -96,7 +95,6 @@ projects:
   - slug: sample
     repoRoot: ./repo
     defaultBranch: trunk
-    worktreeRoot: ./worktrees/sample
     runtimeDataRoot: ./runtime/sample
     verification:
       commands:
@@ -115,7 +113,6 @@ projects:
       slug: "sample",
       repoRoot: join(tempRoot, "repo"),
       defaultBranch: "trunk",
-      worktreeRoot: join(tempRoot, "worktrees/sample"),
       runtimeDataRoot: join(tempRoot, "runtime/sample"),
     });
   });

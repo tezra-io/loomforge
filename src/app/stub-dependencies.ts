@@ -35,7 +35,7 @@ export function createStubWorkflowDependencies(): StubWorkflowDependencies {
       prepareWorkspace: async (project) => ({
         outcome: "success",
         workspace: {
-          path: project.worktreeRoot,
+          path: project.repoRoot,
           branchName: project.devBranch,
         },
       }),

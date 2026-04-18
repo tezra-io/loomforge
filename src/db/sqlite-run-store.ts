@@ -17,7 +17,7 @@ import type {
   WorkflowRunStore,
   WorkspaceSnapshot,
 } from "../workflow/index.js";
-import { schemaVersion, sqliteSchema } from "./schema.js";
+import { migrations, schemaVersion, sqliteSchema } from "./schema.js";
 
 type Row = Record<string, unknown>;
 
@@ -45,14 +45,13 @@ export class SqliteRunStore implements WorkflowRunStore {
     this.db
       .prepare(
         `INSERT INTO projects (
-          slug, repo_root, default_branch, dev_branch, worktree_root,
+          slug, repo_root, default_branch, dev_branch,
           runtime_data_root, config_json, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(slug) DO UPDATE SET
           repo_root = excluded.repo_root,
           default_branch = excluded.default_branch,
           dev_branch = excluded.dev_branch,
-          worktree_root = excluded.worktree_root,
           runtime_data_root = excluded.runtime_data_root,
           config_json = excluded.config_json,
           updated_at = excluded.updated_at`,
@@ -62,7 +61,6 @@ export class SqliteRunStore implements WorkflowRunStore {
         project.repoRoot,
         project.defaultBranch,
         project.devBranch,
-        project.worktreeRoot,
         project.runtimeDataRoot,
         JSON.stringify(project),
         new Date().toISOString(),
@@ -110,9 +108,64 @@ export class SqliteRunStore implements WorkflowRunStore {
 
   private applySchema(): void {
     this.db.exec(sqliteSchema);
+    const currentVersion = this.getCurrentSchemaVersion();
+    this.applyMigrations(currentVersion);
     this.db
       .prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
       .run(schemaVersion, new Date().toISOString());
+  }
+
+  private getCurrentSchemaVersion(): number {
+    try {
+      const row = this.db.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
+        | Row
+        | undefined;
+      if (!row || row["version"] === null || row["version"] === undefined) {
+        return 0;
+      }
+      return readNumber(row, "version");
+    } catch {
+      return 0;
+    }
+  }
+
+  private applyMigrations(currentVersion: number): void {
+    for (const migration of migrations) {
+      if (migration.version <= currentVersion) {
+        continue;
+      }
+      if (migration.needsCheck && migration.checkColumn) {
+        if (!this.columnExists(migration.checkColumn.table, migration.checkColumn.column)) {
+          this.db
+            .prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+            .run(migration.version, new Date().toISOString());
+          continue;
+        }
+      }
+      if (migration.disableForeignKeys) {
+        this.db.exec("PRAGMA foreign_keys = OFF");
+      }
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.exec(migration.sql);
+        this.db
+          .prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+          .run(migration.version, new Date().toISOString());
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw new Error(`Schema migration to v${migration.version} failed`, { cause: error });
+      } finally {
+        if (migration.disableForeignKeys) {
+          this.db.exec("PRAGMA foreign_keys = ON");
+        }
+      }
+    }
+  }
+
+  private columnExists(table: string, column: string): boolean {
+    const rows = this.db.prepare(`PRAGMA table_info(${table})`).all() as Row[];
+    return rows.some((row) => row["name"] === column);
   }
 
   private upsertRun(run: RunRecord): void {
@@ -173,7 +226,7 @@ export class SqliteRunStore implements WorkflowRunStore {
     }
 
     this.db
-      .prepare("INSERT INTO workspaces (run_id, worktree_path, branch_name) VALUES (?, ?, ?)")
+      .prepare("INSERT INTO workspaces (run_id, workspace_path, branch_name) VALUES (?, ?, ?)")
       .run(run.id, run.workspace.path, run.workspace.branchName);
   }
 
@@ -319,7 +372,7 @@ export class SqliteRunStore implements WorkflowRunStore {
     }
 
     return {
-      path: readString(row, "worktree_path"),
+      path: readString(row, "workspace_path"),
       branchName: readString(row, "branch_name"),
     };
   }

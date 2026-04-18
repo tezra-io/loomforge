@@ -208,7 +208,7 @@ describe("workflow engine", () => {
     expect(run.handoff).toMatchObject({
       version: 1,
       status: "shipped",
-      worktreePath: workspace.path,
+      workspacePath: workspace.path,
       branchName: "dev",
       commitShas: ["sha-1"],
       recommendedNextAction: "merge",

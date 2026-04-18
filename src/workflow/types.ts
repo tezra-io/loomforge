@@ -130,7 +130,7 @@ export interface RunHandoff {
   version: 1;
   runId: string;
   status: RunState;
-  worktreePath: string;
+  workspacePath: string;
   branchName: string;
   changedFiles: string[];
   commitShas: string[];

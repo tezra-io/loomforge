@@ -56,7 +56,7 @@ export const runHandoffSchema = z
       "failed",
       "cancelled",
     ]),
-    worktreePath: z.string().trim().min(1),
+    workspacePath: z.string().trim().min(1),
     branchName: z.string().trim().min(1),
     changedFiles: z.array(z.string().trim().min(1)),
     commitShas: z.array(z.string().trim().min(1)),

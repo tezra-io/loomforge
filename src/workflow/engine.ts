@@ -496,7 +496,7 @@ export class WorkflowEngine {
       version: 1,
       runId: run.id,
       status: "shipped",
-      worktreePath: workspace.path,
+      workspacePath: workspace.path,
       branchName: workspace.branchName,
       changedFiles: [...changedFiles],
       commitShas,

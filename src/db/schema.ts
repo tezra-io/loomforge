@@ -1,4 +1,53 @@
-export const schemaVersion = 1;
+export const schemaVersion = 2;
+
+export interface SchemaMigration {
+  version: number;
+  sql: string;
+  needsCheck?: boolean;
+  checkColumn?: { table: string; column: string };
+  disableForeignKeys?: boolean;
+}
+
+export const migrations: SchemaMigration[] = [
+  {
+    version: 2,
+    needsCheck: true,
+    checkColumn: { table: "projects", column: "worktree_root" },
+    disableForeignKeys: true,
+    sql: `
+-- Drop worktree_root from projects (SQLite requires table rebuild)
+CREATE TABLE projects_v2 (
+  slug TEXT PRIMARY KEY,
+  repo_root TEXT NOT NULL,
+  default_branch TEXT NOT NULL,
+  dev_branch TEXT NOT NULL,
+  runtime_data_root TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO projects_v2 (slug, repo_root, default_branch, dev_branch, runtime_data_root, config_json, updated_at)
+  SELECT slug, repo_root, default_branch, dev_branch, runtime_data_root, config_json, updated_at FROM projects;
+DROP TABLE projects;
+ALTER TABLE projects_v2 RENAME TO projects;
+
+-- Rename worktree_path to workspace_path in workspaces
+CREATE TABLE workspaces_v2 (
+  run_id TEXT PRIMARY KEY,
+  workspace_path TEXT NOT NULL,
+  branch_name TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+INSERT INTO workspaces_v2 (run_id, workspace_path, branch_name)
+  SELECT run_id, worktree_path, branch_name FROM workspaces;
+DROP TABLE workspaces;
+ALTER TABLE workspaces_v2 RENAME TO workspaces;
+
+-- Migrate handoff JSON: rename worktreePath to workspacePath
+UPDATE runs SET handoff_json = REPLACE(handoff_json, '"worktreePath"', '"workspacePath"')
+  WHERE handoff_json IS NOT NULL AND handoff_json LIKE '%worktreePath%';
+`,
+  },
+];
 
 export const sqliteSchema = `
 PRAGMA foreign_keys = ON;
@@ -13,7 +62,6 @@ CREATE TABLE IF NOT EXISTS projects (
   repo_root TEXT NOT NULL,
   default_branch TEXT NOT NULL,
   dev_branch TEXT NOT NULL,
-  worktree_root TEXT NOT NULL,
   runtime_data_root TEXT NOT NULL,
   config_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -36,7 +84,7 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS workspaces (
   run_id TEXT PRIMARY KEY,
-  worktree_path TEXT NOT NULL,
+  workspace_path TEXT NOT NULL,
   branch_name TEXT NOT NULL,
   FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
