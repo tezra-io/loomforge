@@ -38,7 +38,6 @@ beforeEach(async () => {
     linear: deps.linear,
     worktrees: deps.worktrees,
     builder: deps.builder,
-    verifier: deps.verifier,
     reviewer: deps.reviewer,
   });
   scheduler = {

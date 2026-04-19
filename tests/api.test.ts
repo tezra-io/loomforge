@@ -53,7 +53,6 @@ function createTestServer(options?: {
     linear: dependencies.linear,
     worktrees,
     builder: dependencies.builder,
-    verifier: dependencies.verifier,
     reviewer: dependencies.reviewer,
   });
   const scheduler: DrainScheduler = {
