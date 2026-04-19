@@ -1,299 +1,201 @@
-# Loom
+# Loomforge
 
-Loom is a slim local workflow engine for agentic software delivery.
+Loomforge is a local workflow engine that turns Linear issues into shipped code.
+It runs an agentic build → review → ship pipeline: fetch the issue, generate
+code, review it, and open a pull request — fully unattended.
 
-Goal: keep the parts Sujeeth actually needs from Paperclip, ditch the org-chart/platform overhead, and make design -> build -> review -> ship reliable.
+## Why
 
-## Current Runnable Shell
+I've been running an overnight build pipeline since the early days of OpenClaw.
+After brainstorming designs with OpenClaw and Claude during the day, a nightly
+cron job would pick up the Linear issues, use Claude to build and Codex to
+review, and move issues to Done by morning. It worked — until it didn't.
+Breaking changes in Claude's tool use, instability in OpenClaw's ACP protocol,
+and fragile skill wiring meant the workflow would silently break every few
+weeks. I looked at Paperclip, but it carries too much weight — multi-tenant,
+Postgres, plugin marketplace — for what is fundamentally a single-developer
+overnight build loop. Loomforge is the lighter, purpose-built replacement:
+same pipeline, fewer moving parts, easy to fix when something changes.
 
-The daemon shell is runnable with stub workflow dependencies. It exercises the
-HTTP API, CLI, workflow engine, SQLite store, queue drain, and handoff path, but
-it does not yet call real Linear, git worktrees, Codex, or Claude.
+## Install
 
-Create a project registry:
+```sh
+npm install -g loomforge
+```
+
+This installs the `loomforge` CLI and scaffolds `~/.loomforge/` with default config files.
+
+### Prerequisites
+
+- Node 22+
+- [Codex CLI](https://github.com/openai/codex) and/or [Claude Code CLI](https://claude.ai/claude-code) — builder and reviewer runners (configurable per project)
+- [Linear API key](https://linear.app/settings/api) — issue fetching and status sync
+
+## Setup
+
+### 1. Add your Linear API key
+
+Edit `~/.loomforge/config.yaml`:
 
 ```yaml
-runtime:
-  dataRoot: .loom-data
+linear:
+  apiKey: lin_api_YOUR_KEY_HERE
+```
+
+Or set an environment variable instead:
+
+```sh
+export LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
+```
+
+### 2. Add a project
+
+Append to the `projects:` list in `~/.loomforge/loom.yaml`:
+
+```yaml
 projects:
-  - slug: loom
-    repoRoot: /Users/sujshe/projects/loom
+  - slug: my-project
+    repoRoot: /path/to/repo
     defaultBranch: main
+    linearTeamKey: TEZ              # required for project-level submission
+    linearProjectName: My Project  # Linear project name — filters issues to this project
+    builder: codex                 # "codex" or "claude" (default: claude)
+    reviewer: claude               # "codex" or "claude" (default: claude)
     verification:
       commands:
         - name: test
           command: pnpm test
+        - name: lint
+          command: pnpm run lint
 ```
 
-Start the local daemon:
+### 3. Start the daemon
 
 ```sh
-pnpm run dev -- start --config ./loom.yaml --port 3777
+loomforge start                             # uses ~/.loomforge/loom.yaml
+loomforge start --config /other/path.yaml   # custom config
 ```
 
-Use the CLI from another shell:
+### 4. Use the CLI
+
+From another shell:
 
 ```sh
-pnpm run dev -- status
-pnpm run dev -- submit loom TEZ-1
-pnpm run dev -- queue
+loomforge status                        # daemon health check
+loomforge submit my-project TEZ-1       # submit a single Linear issue
+loomforge submit my-project             # enqueue all actionable issues for a project
+loomforge queue                         # list queued/active runs
+loomforge get <run-id>                  # get run state and findings
+loomforge cancel <run-id>               # cancel a queued run
+loomforge retry <run-id>                # retry a failed/blocked run
 ```
 
-The next implementation phases replace the stubs with the real verification
-runner, worktree manager, Linear client, MCP adapter, and Codex/Claude runners.
+### 5. Install the MCP server
+
+```sh
+npx add-mcp loomforge -- loomforge mcp-serve
+```
+
+Detects your installed agents (Claude Code, Codex, OpenClaw, Cursor, etc.) and
+writes the config for each. Or target specific agents:
+
+```sh
+npx add-mcp loomforge -- loomforge mcp-serve -a claude-code -a codex
+```
+
+MCP tools: `loom_health`, `loom_submit_run`, `loom_submit_project`, `loom_get_run`,
+`loom_get_queue`, `loom_get_project_status`, `loom_cancel_run`, `loom_retry_run`,
+`loom_cleanup_workspace`.
+
+### 6. Install the agent skill
+
+```sh
+npx skills add tezra-io/loomforge
+```
+
+Installs the Loomforge skill to your agent's skills directory. Supports Claude
+Code, Codex, Cursor, and [40+ agents](https://github.com/vercel-labs/skills).
+
+## Install from Source
+
+```sh
+git clone git@github.com:tezra-io/loomforge.git
+cd loomforge
+pnpm install
+pnpm run build
+```
+
+Run locally without a global install:
+
+```sh
+pnpm run dev start --config ./loom.yaml
+pnpm run dev status
+pnpm run dev submit my-project TEZ-1
+pnpm run dev queue
+```
+
+A default `loom.yaml` is included in the repo root for local testing. Add projects to it as needed.
+
+Or link the CLI globally for development:
+
+```sh
+pnpm link --global
+loomforge --help
+```
+
+## Testing
+
+### Smoke test (no external deps)
+
+```sh
+# Terminal 1: start daemon
+loomforge start --config ./loom.yaml --port 3777
+
+# Terminal 2: exercise the API
+loomforge status
+loomforge submit my-project TEZ-1
+loomforge queue
+loomforge get <run-id>
+```
+
+From source without a global link:
+
+```sh
+pnpm run dev start --config ./loom.yaml --port 3777
+pnpm run dev status
+```
+
+### Full run with real runners
+
+Prerequisites: builder and reviewer CLIs authenticated, Linear API key
+configured, a test repo with a `dev` branch.
+
+```sh
+# 1. Start daemon with a config pointing at a real repo
+loomforge start --config ./loom.yaml
+
+# 2. Submit issues
+loomforge submit my-project TEZ-1        # single issue
+loomforge submit my-project              # all actionable issues
+
+# 3. Watch progress
+loomforge queue
+loomforge get <run-id>
+
+# 4. When all issues complete, a PR from dev→main is created automatically
+```
+
+## Agent Configuration
+
+The Loomforge repo ships `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) at the
+repo root, automatically discovered when agents run inside this repo.
+
+For projects that Loomforge builds against, the builder prompt instructs Codex to
+read the target repo's own `AGENTS.md` / `CLAUDE.md` before making changes.
 
 ## System Architecture
 
-```mermaid
-graph TB
-    subgraph OpenClaw ["OpenClaw (Front Door & Planner)"]
-        Chat["Chat with User"]
-        Plan["Design / Planning"]
-        Merge["Merge dev → main"]
-    end
-
-    subgraph Linear ["Linear"]
-        Issues["Issues"]
-    end
-
-    subgraph Loom ["Loom (Local Daemon — loomd)"]
-        MCP["MCP Server"]
-        API["HTTP API (Fastify)"]
-        CLI["CLI (Commander)"]
-        LC["Linear Client"]
-        WF["Workflow Engine"]
-        Queue["Durable Ready Queue"]
-        DB["SQLite State Store"]
-        WT["Worktree Manager"]
-        Art["Artifact Store (~/.loom/)"]
-
-        subgraph Runners
-            Codex["Codex Builder Runner\n(full-auto)"]
-            Claude["Claude Reviewer Runner\n(skip-permissions)"]
-        end
-    end
-
-    subgraph ProjectConfig ["Project Config (YAML files)"]
-        Reg["Project Registry"]
-        Verify["Verification Commands"]
-    end
-
-    subgraph Git ["Git"]
-        Repo["Local Repo"]
-        DevWT["dev branch worktree"]
-    end
-
-    Chat -->|selects issues| Plan
-    Plan -->|"issue ID + project slug"| MCP
-    MCP --> API
-    CLI -->|operator access| API
-    API --> WF
-    WF --> LC
-    LC -->|fetch issue details| Issues
-    LC -->|"update status → Done"| Issues
-    WF --> Queue
-    WF --> DB
-    WF --> WT
-    WF --> Codex
-    WF --> Claude
-    WF --> Art
-    Codex -->|"build + commit + push"| DevWT
-    Claude -->|reviews diff| DevWT
-    WT -->|"rebase dev on main"| DevWT
-    DevWT --> Repo
-    WF -->|"shipped notification"| Merge
-    ProjectConfig --> WF
-```
-
-## Workflow State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> queued : OpenClaw submits issue ID
-
-    queued --> preparing_workspace : dequeue (FIFO)
-    preparing_workspace --> building : rebase dev on main + workspace ready
-    preparing_workspace --> blocked : dirty workspace / rebase conflict
-
-    building --> verifying : Codex completes
-    building --> failed : runner error / timeout
-
-    verifying --> reviewing : checks pass
-    verifying --> revising : checks fail (budget remaining)
-    verifying --> failed : checks fail (budget exhausted)
-    verifying --> blocked : environmental failure
-
-    reviewing --> ready_for_ship : review passes
-    reviewing --> revising : P0/P1 findings (budget remaining)
-    reviewing --> blocked : unresolved P0 (budget exhausted)
-    reviewing --> failed : runner error / timeout
-
-    revising --> building : feed findings back to Codex
-
-    ready_for_ship --> shipped : push dev + Linear Done
-    shipped --> [*]
-
-    queued --> cancelled : operator / shutdown
-    preparing_workspace --> cancelled : operator / shutdown
-    building --> cancelled : operator / shutdown
-    verifying --> cancelled : operator / shutdown
-    reviewing --> cancelled : operator / shutdown
-    revising --> cancelled : operator / shutdown
-
-    note right of revising
-        Max 3 revision loops (default).
-        Single revisionCount incremented
-        on each return to building.
-    end note
-```
-
-## Build → Verify → Review Loop
-
-```mermaid
-sequenceDiagram
-    participant OC as OpenClaw
-    participant API as Loom API
-    participant WF as Workflow Engine
-    participant WT as Worktree Manager
-    participant CX as Codex Builder
-    participant VR as Verification
-    participant CR as Claude Reviewer
-    participant Art as Artifact Store
-
-    participant LN as Linear
-
-    OC->>API: loom_submit_run (project + issue ID)
-    API->>WF: create run (queued)
-    WF->>LN: fetch issue (title, description, criteria)
-    LN-->>WF: issue snapshot
-    WF->>LN: update status → In Progress
-    WF->>WT: prepare worktree (rebase dev on main)
-    WT-->>WF: worktree path (dev branch)
-
-    loop Up to 3 revision cycles
-        WF->>CX: build in worktree
-        Note over CX: Codex implements + git commit (handles pre-commit hooks)
-        CX-->>Art: builder.log, changed files
-        CX-->>WF: BuilderResult (with commitSha)
-
-        WF->>VR: run verification commands (against committed code)
-        VR-->>Art: verify.log
-        VR-->>WF: pass / fail
-
-        alt Verification fails & budget remaining
-            WF->>WF: revise (feed failure back)
-        else Verification passes
-            WF->>CR: review diff + evidence (against committed code)
-            CR-->>Art: review.log, findings
-            CR-->>WF: ReviewResult
-
-            alt Review passes (ready_for_ship)
-                WF->>CX: push dev to remote (handles pre-push hooks)
-                CX-->>WF: push confirmed (shipped)
-                WF->>LN: update status → Done
-                WF->>Art: write handoff.json
-                WF-->>OC: shipped (notification)
-            else Review has findings & budget remaining
-                WF->>WF: revise (feed findings back)
-            end
-        end
-    end
-
-    alt Budget exhausted with P0s
-        WF-->>OC: blocked
-    else Unrecoverable error
-        WF-->>OC: failed
-    end
-```
-
-## Data Model
-
-```mermaid
-erDiagram
-    projects ||--o{ runs : "has"
-    runs ||--o{ run_attempts : "contains"
-    runs ||--o{ events : "emits"
-    runs ||--|| workspaces : "uses"
-    run_attempts ||--o{ verifications : "produces"
-    run_attempts ||--o{ reviews : "produces"
-    reviews ||--o{ review_findings : "contains"
-    runs ||--o{ artifacts : "stores"
-
-    projects {
-        string slug PK
-        string repo_root
-        string default_branch
-        string worktree_root
-    }
-
-    runs {
-        string id PK
-        string project_slug FK
-        string issue_id
-        string state
-        string failure_reason
-        int revision_count
-        timestamp created_at
-        timestamp updated_at
-    }
-
-    run_attempts {
-        string id PK
-        string run_id FK
-        int attempt_number
-        string outcome
-    }
-
-    workspaces {
-        string id PK
-        string run_id FK
-        string worktree_path
-        string branch_name
-    }
-
-    reviews {
-        string id PK
-        string attempt_id FK
-        string outcome
-    }
-
-    review_findings {
-        string id PK
-        string review_id FK
-        string severity
-        string title
-        string detail
-    }
-
-    events {
-        string id PK
-        string run_id FK
-        string type
-        timestamp created_at
-    }
-```
-
-## Runtime Layout
-
-```mermaid
-graph LR
-    subgraph "~/.loom/"
-        subgraph data ["data/"]
-            db["loom.db"]
-            subgraph runs ["runs/<run-id>/"]
-                bp["builder-prompt.md"]
-                bl["builder.log"]
-                vl["verify.log"]
-                rp["review-prompt.md"]
-                rl["review.log"]
-                hj["handoff.json"]
-            end
-        end
-        subgraph wt ["worktrees/"]
-            pw["<project>/dev/"]
-        end
-    end
-```
+![Loomforge Architecture](docs/architecture.png)
 
 ## Module Map
 
@@ -307,10 +209,20 @@ graph LR
 | Linear | `src/linear/` | Linear API client — issue fetching and status sync |
 | MCP | `src/mcp/` | MCP server adapter — primary OpenClaw integration |
 | Workflow | `src/workflow/` | Run state machine, queue drain, retry/recovery |
-| Runners | `src/runners/` | Codex builder (full-auto) + Claude reviewer (skip-permissions) |
+| Runners | `src/runners/` | Configurable builder + reviewer (Codex or Claude per project) |
 | Worktrees | `src/worktrees/` | Single `dev` branch worktree per project, rebase, cleanup |
 | Artifacts | `src/artifacts/` | Prompt/log/result persistence |
 
 ## V1 Stack
 
 TypeScript · Node 22+ · Fastify · Commander · MCP SDK · @linear/sdk · SQLite · zod · execa · pino
+
+## Development
+
+```sh
+pnpm run build       # compile TypeScript
+pnpm run test        # run tests (vitest)
+pnpm run lint        # eslint
+pnpm run format      # prettier check
+pnpm run typecheck   # tsc --noEmit
+```

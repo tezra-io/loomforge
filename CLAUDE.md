@@ -1,11 +1,11 @@
-# loom
+# loomforge
 
 ## Project
-Loom is a slim local workflow engine for agentic software delivery.
+Loomforge is a slim local workflow engine for agentic software delivery.
 
 It is intentionally narrower than Paperclip.
 
-OpenClaw remains the front door and planner. Loom owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
+OpenClaw remains the front door and planner. Loomforge owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
 
 ## Behavioral Guidance
 - The approved design is the plan. Implement against it, do not quietly re-design the task mid-flight.
@@ -52,12 +52,12 @@ pnpm run format
 ## Docs
 - `docs/` — repo docs directory, start here before coding
 - `docs/loom-v1-design.md` — V1 design: architecture, state machine, contracts, build order
-- `docs/CONTEXT.md` — Project context: why Loom exists, scope, system boundary
+- `docs/CONTEXT.md` — Project context: why Loomforge exists, scope, system boundary
 - `docs/APPROACHES.md` — Evaluated approaches and trade-offs
 - `docs/loom-v1-review.md` — Design review findings and resolutions
 
 ## Known Pitfalls
-- Do not confuse config work with Loom's product surface. Config is only step 1; the core product is the workflow engine that owns runs, queue draining, Linear sync, worktree prep, build, verification, review, revision loops, push, and handoff.
+- Do not confuse config work with Loomforge's product surface. Config is only step 1; the core product is the workflow engine that owns runs, queue draining, Linear sync, worktree prep, build, verification, review, revision loops, push, and handoff.
 - After touching `src/config/`, the next implementation step should usually be `src/workflow/`, `src/db/`, `src/worktrees/`, `src/runners/`, `src/linear/`, `src/api/`, or `src/mcp/`. Do not add more config knobs unless an engine/module contract already needs them.
 
 ---
@@ -80,19 +80,19 @@ These notes came from the previous `CLAUDE.md`. Keep the template above as the p
 - **Config parsing:** `yaml` or `js-yaml`
 
 ## Architecture rules
-- Do not turn Loom into Paperclip-lite.
+- Do not turn Loomforge into Paperclip-lite.
 - No org chart, CEO, manager, approval, budget, or multi-tenant abstractions in V1.
-- OpenClaw decides what work enters Loom (by issue identifier only). OpenClaw does not package issue content.
-- Loom owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
-- OpenClaw integrates with Loom via MCP server as the primary path.
+- OpenClaw decides what work enters Loomforge (by issue identifier only). OpenClaw does not package issue content.
+- Loomforge owns the full execution lifecycle: Linear fetch, build, verify, review, commit, push, and Linear status sync.
+- OpenClaw integrates with Loomforge via MCP server as the primary path.
 - All issues for a project commit to a single `dev` branch worktree, rebased on the default branch before each run. OpenClaw or the operator merges `dev` into `main`.
 - V1 allows one active run at a time, backed by a small durable ready queue.
-- Loom should run as a `launchd`-managed local daemon and start along with OpenClaw.
+- Loomforge should run as a `launchd`-managed local daemon and start along with OpenClaw.
 - Keep Codex as the builder and Claude as the reviewer in V1.
 - Codex and Claude access must stay harness-only. No direct OAuth, no generic first-party/third-party provider auth layer.
 - Codex builder runs in `--approval-mode full-auto`. Claude reviewer runs with `--dangerously-skip-permissions`. Both are unattended daemon subprocesses.
 - Verification commands come from project config, not issue text.
-- Runtime state and artifacts live under `~/.loom/`.
+- Runtime state and artifacts live under `~/.loomforge/`.
 - Builder and reviewer runners produce structured artifacts, not just console output.
 - Keep config in files and runtime state in SQLite.
 - Prefer explicit state transitions over clever autonomous behavior.
@@ -151,7 +151,7 @@ External reference material:
 - Paperclip MCP `makeTool` pattern: `/Users/sujshe/projects/paperclip/packages/mcp-server/src/tools.ts`
 - Rollback baseline for old dev-build workflow: `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/REVERT_BASELINE_2026-04-08.md`
 
-Build Loom from scratch. Reference the dev-build skill for workflow shape, prompt patterns, and Linear queries. Reference Paperclip MCP for tool definition patterns. Do not extract or copy Paperclip code — it carries too much platform weight (Postgres, multi-tenant, plugins, auth, UI).
+Build Loomforge from scratch. Reference the dev-build skill for workflow shape, prompt patterns, and Linear queries. Reference Paperclip MCP for tool definition patterns. Do not extract or copy Paperclip code — it carries too much platform weight (Postgres, multi-tenant, plugins, auth, UI).
 
 ## Practical guidance for future work
 - Keep v1 boring and durable.
