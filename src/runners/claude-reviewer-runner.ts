@@ -8,18 +8,22 @@ import type {
   ReviewResult,
   WorkflowStepContext,
 } from "../workflow/types.js";
+import { agentCommand, type AgentTool } from "./codex-builder-runner.js";
 import { runProcess } from "./process-runner.js";
 import { reviewPrompt } from "./prompts/reviewer.js";
 
-export interface ClaudeReviewerRunnerOptions {
+export interface ReviewerRunnerOptions {
   artifactDir: string;
+  tool: AgentTool;
 }
 
-export class ClaudeReviewerRunner implements ReviewerRunner {
+export class ReviewerRunnerImpl implements ReviewerRunner {
   private readonly artifactDir: string;
+  private readonly defaultTool: AgentTool;
 
-  constructor(options: ClaudeReviewerRunnerOptions) {
+  constructor(options: ReviewerRunnerOptions) {
     this.artifactDir = options.artifactDir;
+    this.defaultTool = options.tool;
   }
 
   async review(context: WorkflowStepContext): Promise<ReviewResult> {
@@ -27,12 +31,15 @@ export class ClaudeReviewerRunner implements ReviewerRunner {
     const logDir = join(this.artifactDir, run.id, attempt.id);
 
     const diff = await this.getDiff(workspace.path, project.defaultBranch);
-    const prompt = reviewPrompt(context, diff);
+    const prompt = reviewPrompt(context, diff, attempt.verificationResult);
 
+    const tool = project.reviewer ?? this.defaultTool;
+    const { command, args } = agentCommand(tool);
     const result = await runProcess({
-      command: "claude",
-      args: ["--dangerously-skip-permissions", "-p", prompt],
+      command,
+      args,
       cwd: workspace.path,
+      stdin: prompt,
       timeoutMs: project.timeouts.reviewerMs,
       artifactDir: logDir,
       label: "reviewer",

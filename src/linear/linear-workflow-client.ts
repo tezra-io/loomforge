@@ -1,7 +1,7 @@
 import { LinearClient } from "@linear/sdk";
 
 import type { ProjectConfig } from "../config/index.js";
-import type { IssueSnapshot, LinearWorkflowClient } from "../workflow/index.js";
+import type { IssueSnapshot, LinearIssueSummary, LinearWorkflowClient } from "../workflow/index.js";
 
 export class LinearAuthError extends Error {
   constructor(message: string) {
@@ -44,6 +44,65 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient {
         comments: comments.nodes.map((c) => c.body),
         priority: issue.priorityLabel,
       };
+    });
+  }
+
+  async listProjectIssues(project: ProjectConfig): Promise<LinearIssueSummary[]> {
+    const teamKey = project.linearTeamKey;
+    if (!teamKey) {
+      throw new Error(
+        `Project "${project.slug}" has no linearTeamKey configured — ` +
+          "add it to loom.yaml to use project-level submission",
+      );
+    }
+
+    return this.safeRequest(async () => {
+      const teams = await this.client.teams({ filter: { key: { eq: teamKey } } });
+      const team = teams.nodes[0];
+      if (!team) {
+        throw new Error(`Linear team not found: ${teamKey}`);
+      }
+
+      const states = await team.states();
+      const todoStates = states.nodes.filter((s) => s.type === "unstarted" || s.type === "started");
+      const todoStateIds = todoStates.map((s) => s.id);
+
+      if (todoStateIds.length === 0) {
+        return [];
+      }
+
+      const issueFilter: Record<string, unknown> = {
+        team: { key: { eq: teamKey } },
+        state: { id: { in: todoStateIds } },
+      };
+      if (project.linearProjectName) {
+        issueFilter.project = { name: { eq: project.linearProjectName } };
+      }
+
+      const issues: LinearIssueSummary[] = [];
+      let connection = await this.client.issues({ filter: issueFilter });
+
+      while (true) {
+        for (const issue of connection.nodes) {
+          issues.push({
+            identifier: issue.identifier,
+            title: issue.title,
+            priority: issue.priority,
+            number: issue.number,
+          });
+        }
+
+        if (!connection.pageInfo.hasNextPage) break;
+        connection = await connection.fetchNext();
+      }
+
+      issues.sort((a, b) => {
+        const pa = a.priority === 0 ? Infinity : a.priority;
+        const pb = b.priority === 0 ? Infinity : b.priority;
+        if (pa !== pb) return pa - pb;
+        return a.number - b.number;
+      });
+      return issues;
     });
   }
 
@@ -95,13 +154,13 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient {
 }
 
 export function createMissingKeyClient(): LinearWorkflowClient {
+  const err = () => {
+    throw new LinearAuthError("Linear API key not configured — add it to ~/.loomforge/config.yaml");
+  };
   return {
-    fetchIssue: () => {
-      throw new LinearAuthError("Linear API key not configured — add it to ~/.loom/config.yaml");
-    },
-    updateIssueStatus: () => {
-      throw new LinearAuthError("Linear API key not configured — add it to ~/.loom/config.yaml");
-    },
+    fetchIssue: err,
+    listProjectIssues: err,
+    updateIssueStatus: err,
   };
 }
 

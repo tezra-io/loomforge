@@ -56,6 +56,10 @@ const projectConfigSchema = z
     repoRoot: pathSchema,
     defaultBranch: nonEmptyStringSchema,
     devBranch: nonEmptyStringSchema.optional(),
+    linearTeamKey: nonEmptyStringSchema.optional(),
+    linearProjectName: nonEmptyStringSchema.optional(),
+    builder: z.enum(["claude", "codex"]).default("claude").optional(),
+    reviewer: z.enum(["claude", "codex"]).default("claude").optional(),
     runtimeDataRoot: pathSchema.optional(),
     verification: z
       .object({
@@ -76,7 +80,7 @@ const registrySchema = z
       })
       .strict()
       .optional(),
-    projects: z.array(projectConfigSchema).nonempty(),
+    projects: z.array(projectConfigSchema),
   })
   .strict();
 
@@ -131,6 +135,10 @@ export interface ProjectConfig {
   repoRoot: string;
   defaultBranch: string;
   devBranch: string;
+  linearTeamKey: string | null;
+  linearProjectName: string | null;
+  builder: "claude" | "codex";
+  reviewer: "claude" | "codex";
   runtimeDataRoot: string;
   verification: {
     commands: VerificationCommandConfig[];
@@ -241,7 +249,7 @@ function buildProjectConfigRegistry(
   options: ProjectConfigRegistryOptions,
 ): ProjectConfigRegistry {
   const configDir = options.configDir ?? process.cwd();
-  const defaultDataRoot = join(options.homeDir, ".loom", "data");
+  const defaultDataRoot = join(options.homeDir, ".loomforge", "data");
   const dataRoot = resolveConfigPath(config.runtime?.dataRoot ?? defaultDataRoot, configDir);
   const projects = config.projects.map((project) =>
     buildProjectConfig(project, {
@@ -277,6 +285,13 @@ function buildProjectConfig(
     homeDir: string;
   },
 ): ProjectConfig {
+  const devBranch = project.devBranch ?? "dev";
+  if (devBranch === project.defaultBranch) {
+    throw new Error(
+      `Project "${project.slug}": devBranch must differ from defaultBranch ("${project.defaultBranch}")`,
+    );
+  }
+
   const timeouts: ProjectTimeoutConfig = {
     builderMs: project.timeouts?.builderMs ?? defaultBuilderTimeoutMs,
     reviewerMs: project.timeouts?.reviewerMs ?? defaultReviewerTimeoutMs,
@@ -287,7 +302,11 @@ function buildProjectConfig(
     slug: project.slug,
     repoRoot: resolveConfigPath(project.repoRoot, context.configDir),
     defaultBranch: project.defaultBranch,
-    devBranch: project.devBranch ?? "dev",
+    devBranch,
+    linearTeamKey: project.linearTeamKey ?? null,
+    linearProjectName: project.linearProjectName ?? null,
+    builder: project.builder ?? "claude",
+    reviewer: project.reviewer ?? "claude",
     runtimeDataRoot: resolveConfigPath(
       project.runtimeDataRoot ?? join(context.dataRoot, "projects", project.slug),
       context.configDir,
