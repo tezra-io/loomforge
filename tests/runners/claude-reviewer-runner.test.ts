@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execa } from "execa";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { ClaudeReviewerRunner } from "../../src/runners/claude-reviewer-runner.js";
+import { ReviewerRunnerImpl } from "../../src/runners/claude-reviewer-runner.js";
 import type { WorkflowStepContext } from "../../src/workflow/types.js";
 import { parseProjectConfigRegistry } from "../../src/config/index.js";
 
@@ -103,7 +103,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("ClaudeReviewerRunner", () => {
+describe("ReviewerRunnerImpl", () => {
   it("returns pass when reviewer outputs passing JSON", async () => {
     const output = JSON.stringify({
       outcome: "pass",
@@ -112,7 +112,7 @@ describe("ClaudeReviewerRunner", () => {
     });
     await writeFakeBinary("claude", `echo '${output}'`);
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("pass");
@@ -136,7 +136,7 @@ describe("ClaudeReviewerRunner", () => {
     });
     await writeFakeBinary("claude", `echo '${output}'`);
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("revise");
@@ -148,7 +148,7 @@ describe("ClaudeReviewerRunner", () => {
   it("returns blocked when reviewer outputs invalid JSON", async () => {
     await writeFakeBinary("claude", "echo 'I could not review this code'");
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("blocked");
@@ -158,7 +158,7 @@ describe("ClaudeReviewerRunner", () => {
   it("returns blocked when reviewer exits non-zero", async () => {
     await writeFakeBinary("claude", "echo 'auth error' >&2; exit 1");
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("blocked");
@@ -170,7 +170,7 @@ describe("ClaudeReviewerRunner", () => {
 
     const project = createContext().project;
     project.timeouts.reviewerMs = 500;
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext({ project }));
 
     expect(result.outcome).toBe("blocked");
@@ -184,7 +184,7 @@ describe("ClaudeReviewerRunner", () => {
       `echo '\\x60\\x60\\x60json'; echo '${json}'; echo '\\x60\\x60\\x60'`,
     );
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("pass");
@@ -202,11 +202,40 @@ describe("ClaudeReviewerRunner", () => {
     });
     await writeFakeBinary("claude", `echo '${output}'`);
 
-    const runner = new ClaudeReviewerRunner({ artifactDir });
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("revise");
     expect(result.findings).toHaveLength(1);
     expect(result.findings.at(0)?.severity).toBe("P0");
+  });
+
+  it("receives prompt on stdin with verification evidence", async () => {
+    const stdinLog = join(tmpDir, "stdin-capture.txt");
+    const output = JSON.stringify({ outcome: "pass", findings: [], summary: "OK" });
+    await writeFakeBinary("claude", `cat > "${stdinLog}" && echo '${output}'`);
+
+    const ctx = createContext();
+    ctx.attempt.verificationResult = {
+      outcome: "pass",
+      summary: "All passed",
+      rawLogPath: "",
+      commandResults: [
+        { name: "test", command: "pnpm test", outcome: "pass", rawLogPath: "" },
+        { name: "lint", command: "pnpm lint", outcome: "pass", rawLogPath: "" },
+      ],
+    };
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    await runner.review(ctx);
+
+    const { readFile } = await import("node:fs/promises");
+    const captured = await readFile(stdinLog, "utf8");
+    expect(captured).toContain("staff engineer");
+    expect(captured).toContain("Integration");
+    expect(captured).toContain("Completeness");
+    expect(captured).toContain("Verification Results");
+    expect(captured).toContain("test: pass");
+    expect(captured).toContain("lint: pass");
   });
 });

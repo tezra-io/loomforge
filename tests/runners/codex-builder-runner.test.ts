@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { execa } from "execa";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { CodexBuilderRunner } from "../../src/runners/codex-builder-runner.js";
+import { BuilderRunnerImpl } from "../../src/runners/codex-builder-runner.js";
 import type { WorkflowStepContext, PushContext } from "../../src/workflow/types.js";
 import { parseProjectConfigRegistry } from "../../src/config/index.js";
 
@@ -21,6 +21,7 @@ projects:
   - slug: test
     repoRoot: ${repoDir}
     defaultBranch: main
+    builder: codex
     timeouts:
       builderMs: 10000
     verification:
@@ -103,14 +104,14 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe("CodexBuilderRunner", () => {
+describe("BuilderRunnerImpl", () => {
   it("returns success when codex creates a commit", async () => {
     await writeFakeBinary(
       "codex",
-      `cd "${repoDir}" && echo "change" > file.txt && git add file.txt && git commit -m "feat: change"`,
+      `cd "${repoDir}" && echo "change" > file.txt && git add file.txt && git commit -m "feat: change" && echo "CHANGED_FILES:" && echo "- file.txt" && echo "SUMMARY:" && echo "added file" && echo "VERIFICATION:" && echo "- echo ok: pass"`,
     );
 
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const result = await runner.build(createContext());
 
     expect(result.outcome).toBe("success");
@@ -121,7 +122,7 @@ describe("CodexBuilderRunner", () => {
   it("returns failed when codex exits non-zero", async () => {
     await writeFakeBinary("codex", "echo 'error' >&2; exit 1");
 
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const result = await runner.build(createContext());
 
     expect(result.outcome).toBe("failed");
@@ -134,7 +135,7 @@ describe("CodexBuilderRunner", () => {
 
     const project = createContext().project;
     project.timeouts.builderMs = 500;
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const result = await runner.build(createContext({ project }));
 
     expect(result.outcome).toBe("failed");
@@ -142,22 +143,57 @@ describe("CodexBuilderRunner", () => {
   }, 15_000);
 
   it("returns failed when codex succeeds but no commit is created", async () => {
-    await writeFakeBinary("codex", "echo 'done'");
+    await writeFakeBinary(
+      "codex",
+      `echo "CHANGED_FILES:" && echo "- nothing.txt" && echo "SUMMARY:" && echo "done" && echo "VERIFICATION:" && echo "- echo ok: pass"`,
+    );
 
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const result = await runner.build(createContext());
 
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("runner_error");
-    expect(result.summary).toContain("no new commit");
+    expect(result.summary).toContain("no changes");
+  });
+
+  it("returns failed after two consecutive no-ops", async () => {
+    await writeFakeBinary("codex", "echo 'just commentary, no contract output'");
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.failureReason).toBe("runner_error");
+    expect(result.summary).toContain("no structured output");
+  });
+
+  it("receives prompt on stdin", async () => {
+    const stdinLog = join(tmpDir, "stdin-capture.txt");
+    await writeFakeBinary(
+      "codex",
+      `cat > "${stdinLog}" && cd "${repoDir}" && echo "change" > file.txt && git add file.txt && git commit -m "feat: stdin" && echo "CHANGED_FILES:" && echo "- file.txt" && echo "SUMMARY:" && echo "done" && echo "VERIFICATION:" && echo "- echo ok: pass"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    await runner.build(createContext());
+
+    const { readFile } = await import("node:fs/promises");
+    const captured = await readFile(stdinLog, "utf8");
+    expect(captured).toContain("Codex builder for TEZ-1");
+    expect(captured).toContain("## Gate");
   });
 });
 
-describe("CodexBuilderRunner push", () => {
-  it("returns success when push exits cleanly", async () => {
+describe("BuilderRunnerImpl push", () => {
+  it("returns success when push exits cleanly and branch is synced", async () => {
+    const bareRemote = join(tmpDir, "remote.git");
+    await execa("git", ["init", "--bare", bareRemote]);
+    await execa("git", ["-C", repoDir, "remote", "add", "origin", bareRemote]);
+    await execa("git", ["-C", repoDir, "push", "-u", "origin", "dev"]);
+
     await writeFakeBinary("codex", "echo 'pushed'");
 
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const pushCtx: PushContext = {
       run: createContext().run,
       project: createContext().project,
@@ -173,7 +209,7 @@ describe("CodexBuilderRunner push", () => {
   it("returns failed when push exits non-zero", async () => {
     await writeFakeBinary("codex", "echo 'push error' >&2; exit 1");
 
-    const runner = new CodexBuilderRunner({ artifactDir });
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
     const pushCtx: PushContext = {
       run: createContext().run,
       project: createContext().project,

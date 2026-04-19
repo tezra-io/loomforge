@@ -24,6 +24,10 @@ function makeProject(repoRoot: string, overrides: Partial<ProjectConfig> = {}): 
     repoRoot,
     defaultBranch: "main",
     devBranch: "dev",
+    linearTeamKey: null,
+    linearProjectName: null,
+    builder: "claude",
+    reviewer: "claude",
     runtimeDataRoot: "/tmp/fake-data",
     verification: {
       commands: [{ name: "test", command: "echo ok", timeoutMs: 10_000 }],

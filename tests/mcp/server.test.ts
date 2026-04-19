@@ -17,6 +17,16 @@ function stubAdapter(overrides: Partial<LoomHttpAdapter> = {}): LoomHttpAdapter 
     cancelRun: async () => ({ run: { id: "run-1", state: "cancelled" } }),
     retryRun: async () => ({ run: { id: "run-1", state: "queued" } }),
     cleanupWorkspace: async () => ({ outcome: "success", summary: "Workspace cleaned" }),
+    submitProject: async () => ({ projectSlug: "test", enqueued: [], skipped: [], totalIssues: 0 }),
+    getProjectStatus: async () => ({
+      done: true,
+      projectSlug: "test",
+      shipped: [],
+      failed: [],
+      blocked: [],
+      cancelled: [],
+      pullRequestUrl: null,
+    }),
     ...overrides,
   };
 }
@@ -59,10 +69,12 @@ describe("MCP server tools", () => {
     expect(names).toEqual([
       "loom_cancel_run",
       "loom_cleanup_workspace",
+      "loom_get_project_status",
       "loom_get_queue",
       "loom_get_run",
       "loom_health",
       "loom_retry_run",
+      "loom_submit_project",
       "loom_submit_run",
     ]);
   });

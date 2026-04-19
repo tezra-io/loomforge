@@ -12,7 +12,7 @@ import {
 } from "../src/config/index.js";
 
 describe("project config registry", () => {
-  it("parses YAML registry entries and resolves default Loom runtime paths", () => {
+  it("parses YAML registry entries and resolves default Loomforge runtime paths", () => {
     const registry = parseProjectConfigRegistry(
       `
 projects:
@@ -43,14 +43,14 @@ projects:
       { homeDir: "/Users/alice" },
     );
 
-    expect(registry.runtime.dataRoot).toBe("/Users/alice/.loom/data");
+    expect(registry.runtime.dataRoot).toBe("/Users/alice/.loomforge/data");
     expect(registry.projects).toHaveLength(1);
     expect(registry.projects[0]).toMatchObject({
       slug: "loom",
       repoRoot: "/repos/loom",
       defaultBranch: "main",
       devBranch: "develop",
-      runtimeDataRoot: "/Users/alice/.loom/data/projects/loom",
+      runtimeDataRoot: "/Users/alice/.loomforge/data/projects/loom",
       timeouts: {
         builderMs: 1800000,
         reviewerMs: 600000,

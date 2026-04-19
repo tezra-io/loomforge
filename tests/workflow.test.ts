@@ -5,9 +5,9 @@ import { SqliteRunStore } from "../src/db/index.js";
 import { WorkflowEngine } from "../src/workflow/index.js";
 import type {
   BuilderResult,
+  LinearIssueSummary,
   PrepareWorkspaceResult,
   ReviewResult,
-  VerificationResult,
   WorkflowRunStore,
   WorkflowStepContext,
 } from "../src/workflow/index.js";
@@ -16,14 +16,14 @@ const issue = {
   identifier: "TEZ-1",
   title: "Build workflow engine",
   description: "Implement the core workflow engine.",
-  acceptanceCriteria: "Runs build, verify, review, and push.",
+  acceptanceCriteria: "Runs build, review, and push.",
   labels: ["loom"],
   comments: [],
   priority: "High",
 };
 
 const workspace = {
-  path: "/Users/alice/.loom/worktrees/loom",
+  path: "/Users/alice/.loomforge/worktrees/loom",
   branchName: "dev",
 };
 
@@ -71,38 +71,6 @@ function builderSuccess(commitSha: string): BuilderResult {
   };
 }
 
-function verificationPass(): VerificationResult {
-  return {
-    outcome: "pass",
-    summary: "verification passed",
-    rawLogPath: "/tmp/verify.log",
-    commandResults: [
-      {
-        name: "test",
-        command: "pnpm test",
-        outcome: "pass",
-        rawLogPath: "/tmp/test.log",
-      },
-    ],
-  };
-}
-
-function verificationFail(): VerificationResult {
-  return {
-    outcome: "fail",
-    summary: "tests failed",
-    rawLogPath: "/tmp/verify-fail.log",
-    commandResults: [
-      {
-        name: "test",
-        command: "pnpm test",
-        outcome: "fail",
-        rawLogPath: "/tmp/test-fail.log",
-      },
-    ],
-  };
-}
-
 function reviewPass(): ReviewResult {
   return {
     outcome: "pass",
@@ -133,13 +101,11 @@ function createEngine(
     newId?: () => string;
     prepareResult?: PrepareWorkspaceResult;
     store?: WorkflowRunStore;
-    verificationResults?: VerificationResult[];
     reviewResults?: ReviewResult[];
   } = {},
 ) {
   const buildContexts: WorkflowStepContext[] = [];
   const linearUpdates: string[] = [];
-  const verificationResults = [...(options.verificationResults ?? [verificationPass()])];
   const reviewResults = [...(options.reviewResults ?? [reviewPass()])];
   let buildCount = 0;
 
@@ -150,6 +116,7 @@ function createEngine(
     store: options.store,
     linear: {
       fetchIssue: async () => issue,
+      listProjectIssues: async () => [],
       updateIssueStatus: async (_project, _issue, statusName) => {
         linearUpdates.push(statusName);
       },
@@ -169,9 +136,6 @@ function createEngine(
         summary: "pushed",
         rawLogPath: "/tmp/push.log",
       }),
-    },
-    verifier: {
-      verify: async () => verificationResults.shift() ?? verificationPass(),
     },
     reviewer: {
       review: async () => reviewResults.shift() ?? reviewPass(),
@@ -196,7 +160,7 @@ function submitRun(engine: WorkflowEngine): string {
 }
 
 describe("workflow engine", () => {
-  it("runs the happy path through build, verify, review, push, and Linear Done", async () => {
+  it("runs the happy path through build, review, push, and Linear Done", async () => {
     const { engine, linearUpdates } = createEngine();
     const runId = submitRun(engine);
 
@@ -218,28 +182,8 @@ describe("workflow engine", () => {
     expect(run.events.map((event) => event.state)).toContain("ready_for_ship");
   });
 
-  it("feeds verification failures into a bounded revision attempt", async () => {
-    const { buildContexts, engine } = createEngine({
-      verificationResults: [verificationFail(), verificationPass()],
-    });
-    const runId = submitRun(engine);
-
-    await engine.drainQueue();
-
-    const run = engine.getRun(runId);
-    expect(run.state).toBe("shipped");
-    expect(run.revisionCount).toBe(1);
-    expect(run.attempts).toHaveLength(2);
-    expect(run.attempts.at(0)?.outcome).toBe("revision_requested");
-    expect(buildContexts.at(1)?.revisionInput).toMatchObject({
-      source: "verification",
-      summary: "tests failed",
-    });
-  });
-
-  it("blocks when review still requires changes after revision budget is exhausted", async () => {
-    const { engine, linearUpdates } = createEngine({
-      maxRevisionLoops: 0,
+  it("rebuilds with review findings and pushes after revision", async () => {
+    const { engine, buildContexts } = createEngine({
       reviewResults: [reviewRevise()],
     });
     const runId = submitRun(engine);
@@ -247,10 +191,10 @@ describe("workflow engine", () => {
     await engine.drainQueue();
 
     const run = engine.getRun(runId);
-    expect(run.state).toBe("blocked");
-    expect(run.failureReason).toBe("review_loop_exhausted");
-    expect(run.handoff).toBeNull();
-    expect(linearUpdates.at(-1)).toBe("Blocked");
+    expect(run.state).toBe("shipped");
+    expect(run.attempts).toHaveLength(2);
+    expect(buildContexts[1]?.revisionInput).toBeTruthy();
+    expect(buildContexts[1]?.revisionInput?.findings[0]?.severity).toBe("P0");
   });
 
   it("rejects run_now_if_idle when work is already queued", () => {
@@ -446,6 +390,7 @@ describe("workflow engine", () => {
       now: createClock(),
       linear: {
         fetchIssue: async () => issue,
+        listProjectIssues: async () => [],
         updateIssueStatus: async () => {},
       },
       worktrees: {
@@ -466,7 +411,7 @@ describe("workflow engine", () => {
         build: async () => builderSuccess("sha-retry"),
         push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
       },
-      verifier: { verify: async () => verificationPass() },
+
       reviewer: { review: async () => reviewPass() },
     });
 
@@ -503,5 +448,130 @@ describe("workflow engine", () => {
 
     const result = engine.cancelRun(runId);
     expect(result.state).toBe("shipped");
+  });
+});
+
+function createRegistryWithTeamKey() {
+  return parseProjectConfigRegistry(
+    `
+projects:
+  - slug: loom
+    repoRoot: /repos/loom
+    defaultBranch: main
+    linearTeamKey: TEZ
+    verification:
+      commands:
+        - name: test
+          command: pnpm test
+`,
+    { homeDir: "/Users/alice" },
+  );
+}
+
+describe("submitProject", () => {
+  it("enqueues all actionable issues from Linear", async () => {
+    const linearIssues: LinearIssueSummary[] = [
+      { identifier: "TEZ-1", title: "First", priority: 1, number: 1 },
+      { identifier: "TEZ-2", title: "Second", priority: 2, number: 2 },
+    ];
+
+    const engine = new WorkflowEngine({
+      registry: createRegistryWithTeamKey(),
+      newId: createIds(),
+      now: createClock(),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => linearIssues,
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => builderSuccess("abc123"),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const result = await engine.submitProject("loom");
+
+    expect(result.totalIssues).toBe(2);
+    expect(result.enqueued).toHaveLength(2);
+    expect(result.enqueued[0]?.issueId).toBe("TEZ-1");
+    expect(result.enqueued[1]?.issueId).toBe("TEZ-2");
+    expect(result.skipped).toHaveLength(0);
+    expect(engine.getQueue()).toHaveLength(2);
+  });
+
+  it("skips issues that already have active runs", async () => {
+    const linearIssues: LinearIssueSummary[] = [
+      { identifier: "TEZ-1", title: "First", priority: 1, number: 1 },
+      { identifier: "TEZ-2", title: "Second", priority: 2, number: 2 },
+    ];
+
+    const engine = new WorkflowEngine({
+      registry: createRegistryWithTeamKey(),
+      newId: createIds(),
+      now: createClock(),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => linearIssues,
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => builderSuccess("abc123"),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    engine.submitRun({ projectSlug: "loom", issueId: "TEZ-1", executionMode: "enqueue" });
+
+    const result = await engine.submitProject("loom");
+
+    expect(result.totalIssues).toBe(2);
+    expect(result.enqueued).toHaveLength(1);
+    expect(result.enqueued[0]?.issueId).toBe("TEZ-2");
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]?.issueId).toBe("TEZ-1");
+    expect(result.skipped[0]?.reason).toBe("already_active");
+  });
+
+  it("returns empty when no actionable issues exist", async () => {
+    const engine = new WorkflowEngine({
+      registry: createRegistryWithTeamKey(),
+      newId: createIds(),
+      now: createClock(),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => [],
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => builderSuccess("abc123"),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const result = await engine.submitProject("loom");
+
+    expect(result.totalIssues).toBe(0);
+    expect(result.enqueued).toHaveLength(0);
+    expect(result.skipped).toHaveLength(0);
+    expect(engine.getQueue()).toHaveLength(0);
   });
 });
