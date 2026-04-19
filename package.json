@@ -1,17 +1,25 @@
 {
-  "name": "loom",
+  "name": "loomforge",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Slim local workflow engine for agentic software delivery",
   "bin": {
-    "loom": "dist/cli/index.js"
+    "loomforge": "dist/cli/index.js"
   },
+  "files": [
+    "dist/",
+    "skills/",
+    "scripts/postinstall.js",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build",
+    "postinstall": "node scripts/postinstall.js",
     "dev": "tsx src/cli/index.ts",
     "dev:watch": "tsx watch src/cli/index.ts",
     "lint": "eslint src/ tests/",
@@ -21,7 +29,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepare": "husky"
+    "prepare": "husky",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
   },
   "lint-staged": {
     "*.ts": [
@@ -30,6 +41,8 @@
     ]
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.31.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
     "eslint": "^10.2.0",

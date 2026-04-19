@@ -3,6 +3,8 @@ dist/
 *.tsbuildinfo
 .env
 .env.*
-docs/*.png
-docs/
+docs/design/
 .DS_store
+loom.yaml
+.loomforge-data/
+.husky/
