@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Slim local workflow engine for agentic software delivery",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tezra-io/loomforge.git"
+  },
+  "homepage": "https://github.com/tezra-io/loomforge",
+  "bugs": {
+    "url": "https://github.com/tezra-io/loomforge/issues"
+  },
   "bin": {
     "loomforge": "dist/cli/index.js"
   },

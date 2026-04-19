@@ -1,8 +1,51 @@
+```
+  _                        __
+ | |    ___   ___  _ __ ___ / _| ___  _ __ __ _  ___
+ | |   / _ \ / _ \| '_ ` _ \ |_ / _ \| '__/ _` |/ _ \
+ | |__| (_) | (_) | | | | | |  | (_) | | | (_| |  __/
+ |_____\___/ \___/|_| |_| |_|_| \___/|_|  \__, |\___|
+                                           |___/
+```
+
 # Loomforge
 
-Loomforge is a local workflow engine that turns Linear issues into shipped code.
-It runs an agentic build → review → ship pipeline: fetch the issue, generate
-code, review it, and open a pull request — fully unattended.
+A local workflow engine that automates the path from Linear issue to pull
+request. It runs an agentic build → review → PR pipeline — fully unattended.
+
+---
+
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [Why](#why)
+- [Prerequisites](#prerequisites)
+- [Quick Start (npm)](#quick-start-npm)
+- [Install from Source](#install-from-source)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [MCP Server (optional)](#mcp-server-optional)
+- [Development](#development)
+- [Testing](#testing)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
+
+---
+
+## What It Does
+
+You point Loomforge at a Linear project. It fetches actionable issues, spins up
+a builder agent (Codex or Claude) to write the code, runs a reviewer agent to
+check it, applies one round of fixes if needed, pushes to a `dev` branch, and
+opens a pull request. You review and merge — Loomforge handles everything
+before that.
+
+**Designed for:** solo developers and small teams who want overnight or
+batch-mode code generation from well-specified Linear issues, without running
+a heavyweight platform.
+
+---
 
 ## Why
 
@@ -17,21 +60,68 @@ Postgres, plugin marketplace — for what is fundamentally a single-developer
 overnight build loop. Loomforge is the lighter, purpose-built replacement:
 same pipeline, fewer moving parts, easy to fix when something changes.
 
-## Install
+---
+
+## Prerequisites
+
+- **Node 22+**
+- **[Codex CLI](https://github.com/openai/codex)** and/or **[Claude Code CLI](https://claude.ai/claude-code)** — builder and reviewer runners (configurable per project)
+- **[Linear API key](https://linear.app/settings/api)** — issue fetching and status sync
+
+---
+
+## Quick Start (npm)
 
 ```sh
 npm install -g loomforge
 ```
 
-This installs the `loomforge` CLI and scaffolds `~/.loomforge/` with default config files.
+The installer scaffolds `~/.loomforge/` with default config files and attempts
+to register the daemon and install the agent skill. If any optional step fails,
+it prints a fallback command you can run manually.
 
-### Prerequisites
+| Step | Detail | Fallback if skipped |
+|------|--------|---------------------|
+| CLI | `loomforge` available on PATH | — (always succeeds) |
+| Config | `~/.loomforge/config.yaml` and `loom.yaml` | — (always succeeds) |
+| Daemon | launchd (macOS) or systemd (Linux) | `loomforge start` |
+| Skill | Installed via `npx skills` | `npx skills add tezra-io/loomforge` |
 
-- Node 22+
-- [Codex CLI](https://github.com/openai/codex) and/or [Claude Code CLI](https://claude.ai/claude-code) — builder and reviewer runners (configurable per project)
-- [Linear API key](https://linear.app/settings/api) — issue fetching and status sync
+> **Note:** Daemon auto-registration is supported on macOS and Linux only.
+> On other platforms, start the daemon manually with `loomforge start`.
 
-## Setup
+After install, configure your Linear API key and add a project
+(see [Configuration](#configuration)).
+
+---
+
+## Install from Source
+
+For contributors or users who prefer to build from source.
+
+```sh
+git clone git@github.com:tezra-io/loomforge.git
+cd loomforge
+pnpm install
+pnpm run build
+```
+
+Link the CLI globally and run the setup:
+
+```sh
+pnpm link --global
+node scripts/postinstall.js
+```
+
+This scaffolds `~/.loomforge/` and attempts to register the daemon and install
+the agent skill — the same steps that `npm install -g` runs automatically.
+
+After setup, configure your Linear API key and add a project
+(see [Configuration](#configuration)).
+
+---
+
+## Configuration
 
 ### 1. Add your Linear API key
 
@@ -58,9 +148,9 @@ projects:
     repoRoot: /path/to/repo
     defaultBranch: main
     linearTeamKey: TEZ              # required for project-level submission
-    linearProjectName: My Project  # Linear project name — filters issues to this project
-    builder: codex                 # "codex" or "claude" (default: claude)
-    reviewer: claude               # "codex" or "claude" (default: claude)
+    linearProjectName: My Project   # Linear project name — filters issues
+    builder: codex                  # "codex" or "claude" (default: claude)
+    reviewer: claude                # "codex" or "claude" (default: claude)
     verification:
       commands:
         - name: test
@@ -71,61 +161,62 @@ projects:
 
 ### 3. Start the daemon
 
+If the daemon was registered via postinstall, it starts on login automatically.
+To start manually:
+
 ```sh
 loomforge start                             # uses ~/.loomforge/loom.yaml
 loomforge start --config /other/path.yaml   # custom config
 ```
 
-### 4. Use the CLI
+---
 
-From another shell:
+## Usage
 
 ```sh
 loomforge status                        # daemon health check
+loomforge submit my-project             # enqueue all actionable issues
 loomforge submit my-project TEZ-1       # submit a single Linear issue
-loomforge submit my-project             # enqueue all actionable issues for a project
 loomforge queue                         # list queued/active runs
-loomforge get <run-id>                  # get run state and findings
-loomforge cancel <run-id>               # cancel a queued run
-loomforge retry <run-id>                # retry a failed/blocked run
+loomforge get <runId>                   # get run state and findings
+loomforge cancel <runId>                # cancel a queued run
+loomforge retry <runId>                 # retry a failed/blocked run
 ```
 
-### 5. Install the MCP server
+---
+
+## MCP Server (optional)
+
+For agents that support MCP tool discovery (OpenClaw, Cursor, etc.), you can
+optionally register the MCP server:
 
 ```sh
 npx add-mcp loomforge -- loomforge mcp-serve
 ```
 
-Detects your installed agents (Claude Code, Codex, OpenClaw, Cursor, etc.) and
-writes the config for each. Or target specific agents:
+Or target specific agents:
 
 ```sh
 npx add-mcp loomforge -- loomforge mcp-serve -a claude-code -a codex
 ```
 
-MCP tools: `loom_health`, `loom_submit_run`, `loom_submit_project`, `loom_get_run`,
-`loom_get_queue`, `loom_get_project_status`, `loom_cancel_run`, `loom_retry_run`,
-`loom_cleanup_workspace`.
+MCP tools: `loom_health`, `loom_submit_run`, `loom_submit_project`,
+`loom_get_run`, `loom_get_queue`, `loom_get_project_status`, `loom_cancel_run`,
+`loom_retry_run`, `loom_cleanup_workspace`.
 
-### 6. Install the agent skill
+---
 
-```sh
-npx skills add tezra-io/loomforge
-```
-
-Installs the Loomforge skill to your agent's skills directory. Supports Claude
-Code, Codex, Cursor, and [40+ agents](https://github.com/vercel-labs/skills).
-
-## Install from Source
+## Development
 
 ```sh
-git clone git@github.com:tezra-io/loomforge.git
-cd loomforge
-pnpm install
-pnpm run build
+pnpm run build       # compile TypeScript
+pnpm run test        # run tests (vitest)
+pnpm run lint        # eslint
+pnpm run format      # prettier check
+pnpm run typecheck   # tsc --noEmit
 ```
 
-Run locally without a global install:
+Run locally without a global link:
 
 ```sh
 pnpm run dev start --config ./loom.yaml
@@ -134,14 +225,7 @@ pnpm run dev submit my-project TEZ-1
 pnpm run dev queue
 ```
 
-A default `loom.yaml` is included in the repo root for local testing. Add projects to it as needed.
-
-Or link the CLI globally for development:
-
-```sh
-pnpm link --global
-loomforge --help
-```
+---
 
 ## Testing
 
@@ -155,7 +239,7 @@ loomforge start --config ./loom.yaml --port 3777
 loomforge status
 loomforge submit my-project TEZ-1
 loomforge queue
-loomforge get <run-id>
+loomforge get <runId>
 ```
 
 From source without a global link:
@@ -171,58 +255,76 @@ Prerequisites: builder and reviewer CLIs authenticated, Linear API key
 configured, a test repo with a `dev` branch.
 
 ```sh
-# 1. Start daemon with a config pointing at a real repo
 loomforge start --config ./loom.yaml
-
-# 2. Submit issues
 loomforge submit my-project TEZ-1        # single issue
 loomforge submit my-project              # all actionable issues
-
-# 3. Watch progress
 loomforge queue
-loomforge get <run-id>
-
-# 4. When all issues complete, a PR from dev→main is created automatically
+loomforge get <runId>
+# When all issues complete, a PR from dev→main is created automatically
 ```
 
-## Agent Configuration
+---
 
-The Loomforge repo ships `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) at the
-repo root, automatically discovered when agents run inside this repo.
-
-For projects that Loomforge builds against, the builder prompt instructs Codex to
-read the target repo's own `AGENTS.md` / `CLAUDE.md` before making changes.
-
-## System Architecture
+## Architecture
 
 ![Loomforge Architecture](docs/architecture.png)
 
-## Module Map
+### Module Map
 
 | Module | Path | Responsibility |
 |--------|------|---------------|
-| API | `src/api/` | Local HTTP endpoints for OpenClaw and operator access |
-| App | `src/app/` | Daemon bootstrap, launchd lifecycle, service composition |
-| CLI | `src/cli/` | Thin operator-facing wrapper over the API |
-| Config | `src/config/` | Project registry, YAML config loading, zod validation |
-| DB | `src/db/` | SQLite schema, migrations, repositories, event log |
-| Linear | `src/linear/` | Linear API client — issue fetching and status sync |
-| MCP | `src/mcp/` | MCP server adapter — primary OpenClaw integration |
+| API | `src/api/` | Local HTTP endpoints |
+| App | `src/app/` | Daemon bootstrap, lifecycle, service composition |
+| CLI | `src/cli/` | Operator-facing wrapper over the API |
+| Config | `src/config/` | Project registry, YAML loading, zod validation |
+| DB | `src/db/` | SQLite schema, migrations, event log |
+| Linear | `src/linear/` | Issue fetching and status sync |
+| MCP | `src/mcp/` | MCP server adapter (optional) |
 | Workflow | `src/workflow/` | Run state machine, queue drain, retry/recovery |
-| Runners | `src/runners/` | Configurable builder + reviewer (Codex or Claude per project) |
-| Worktrees | `src/worktrees/` | Single `dev` branch worktree per project, rebase, cleanup |
+| Runners | `src/runners/` | Configurable builder + reviewer (Codex or Claude) |
+| Worktrees | `src/worktrees/` | Dev branch worktree, rebase, cleanup |
 | Artifacts | `src/artifacts/` | Prompt/log/result persistence |
 
-## V1 Stack
+### Stack
 
 TypeScript · Node 22+ · Fastify · Commander · MCP SDK · @linear/sdk · SQLite · zod · execa · pino
 
-## Development
+### Agent Configuration
 
-```sh
-pnpm run build       # compile TypeScript
-pnpm run test        # run tests (vitest)
-pnpm run lint        # eslint
-pnpm run format      # prettier check
-pnpm run typecheck   # tsc --noEmit
-```
+The Loomforge repo ships `AGENTS.md` (Codex) and `CLAUDE.md` (Claude Code) at
+the repo root, automatically discovered when agents run inside this repo.
+
+For projects that Loomforge builds against, the builder prompt instructs the
+agent to read the target repo's own `AGENTS.md` / `CLAUDE.md` before making
+changes.
+
+---
+
+## Contributing
+
+Contributions are welcome. To get started:
+
+1. Fork the repo and create a feature branch
+2. Install dependencies: `pnpm install`
+3. Make your changes — follow the conventions in `CLAUDE.md`
+4. Run checks: `pnpm run build && pnpm run test && pnpm run lint`
+5. Open a pull request against `main`
+
+Please open an issue before starting large changes so we can align on approach.
+
+**Reporting bugs:** [Open an issue](https://github.com/tezra-io/loomforge/issues)
+with steps to reproduce, expected vs. actual behavior, and your Node/OS version.
+
+---
+
+## Security
+
+If you discover a security vulnerability, please report it privately via
+[GitHub Security Advisories](https://github.com/tezra-io/loomforge/security/advisories/new)
+rather than opening a public issue. We will respond within 7 days.
+
+---
+
+## License
+
+[MIT](LICENSE)
