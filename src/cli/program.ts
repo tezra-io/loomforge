@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
 
 import { Command } from "commander";
 
@@ -18,12 +19,15 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
   const write = options.write ?? ((text: string) => process.stdout.write(text));
   const program = new Command();
 
-  program.name("loom").description("Local workflow engine for agentic delivery").version(VERSION);
+  program
+    .name("loomforge")
+    .description("Local workflow engine for agentic delivery")
+    .version(VERSION);
 
   program
     .command("start")
-    .description("Start the local loomd HTTP daemon")
-    .requiredOption("-c, --config <path>", "project registry YAML file")
+    .description("Start the local loomforged HTTP daemon")
+    .option("-c, --config <path>", "project registry YAML file", defaultConfigPath())
     .option("--db <path>", "SQLite database path")
     .option("--host <host>", "host to bind", "127.0.0.1")
     .option("-p, --port <port>", "port to bind", parsePort, 3777)
@@ -60,21 +64,36 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
 
   program
     .command("submit")
-    .description("Submit a Linear issue run")
+    .description("Submit issue(s) for a project. Omit issueId to enqueue all actionable issues.")
     .argument("<projectSlug>")
-    .argument("<issueId>")
+    .argument("[issueId]")
     .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
     .option("--mode <mode>", "run_now_if_idle or enqueue", "enqueue")
-    .action(async (projectSlug: string, issueId: string, commandOptions: SubmitCommandOptions) => {
-      writeJson(
-        write,
-        await requestJson({ baseUrl: commandOptions.url }, "POST", "/runs", {
-          projectSlug,
-          issueId,
-          executionMode: commandOptions.mode,
-        }),
-      );
-    });
+    .action(
+      async (
+        projectSlug: string,
+        issueId: string | undefined,
+        commandOptions: SubmitCommandOptions,
+      ) => {
+        if (issueId) {
+          writeJson(
+            write,
+            await requestJson({ baseUrl: commandOptions.url }, "POST", "/runs", {
+              projectSlug,
+              issueId,
+              executionMode: commandOptions.mode,
+            }),
+          );
+        } else {
+          writeJson(
+            write,
+            await requestJson({ baseUrl: commandOptions.url }, "POST", "/projects/submit", {
+              projectSlug,
+            }),
+          );
+        }
+      },
+    );
 
   program
     .command("queue")
@@ -162,8 +181,12 @@ interface SubmitCommandOptions extends UrlCommandOptions {
   mode: string;
 }
 
+function defaultConfigPath(): string {
+  return join(homedir(), ".loomforge", "loom.yaml");
+}
+
 function defaultDaemonUrl(): string {
-  return process.env.LOOM_URL ?? "http://127.0.0.1:3777";
+  return process.env.LOOMFORGE_URL ?? "http://127.0.0.1:3777";
 }
 
 function parsePort(value: string): number {

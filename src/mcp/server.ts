@@ -5,7 +5,10 @@ import { VERSION } from "../index.js";
 import type { LoomHttpAdapter } from "./http-adapter.js";
 
 export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
-  const mcp = new McpServer({ name: "loom", version: VERSION }, { capabilities: { tools: {} } });
+  const mcp = new McpServer(
+    { name: "loomforge", version: VERSION },
+    { capabilities: { tools: {} } },
+  );
 
   mcp.tool("loom_health", "Check daemon health and queue depth", async () => {
     return safeCall(() => adapter.health());
@@ -55,6 +58,28 @@ export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
     { runId: z.string().min(1).describe("Run ID to retry") },
     async ({ runId }) => {
       return safeCall(() => adapter.retryRun(runId));
+    },
+  );
+
+  mcp.tool(
+    "loom_submit_project",
+    "Fetch all actionable issues for a project from Linear and enqueue them",
+    {
+      projectSlug: z.string().min(1).describe("Project slug from loom config"),
+    },
+    async ({ projectSlug }) => {
+      return safeCall(() => adapter.submitProject(projectSlug));
+    },
+  );
+
+  mcp.tool(
+    "loom_get_project_status",
+    "Check whether all runs for a project are complete. Returns done: true when no runs are in progress, with lists of shipped, failed, blocked, and cancelled issue IDs. Also returns pullRequestUrl if a PR was created.",
+    {
+      projectSlug: z.string().min(1).describe("Project slug from loom config"),
+    },
+    async ({ projectSlug }) => {
+      return safeCall(() => adapter.getProjectStatus(projectSlug));
     },
   );
 

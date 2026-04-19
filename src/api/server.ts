@@ -15,6 +15,12 @@ const submitRunSchema = z
   })
   .strict();
 
+const submitProjectSchema = z
+  .object({
+    projectSlug: z.string().trim().min(1),
+  })
+  .strict();
+
 const cleanupWorkspaceSchema = z
   .object({
     projectSlug: z.string().trim().min(1),
@@ -65,6 +71,34 @@ export function createApiServer(options: CreateApiServerOptions) {
       });
       options.scheduler.schedule();
       return reply.code(202).send(response);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+  });
+
+  server.post("/projects/submit", async (request, reply) => {
+    const parsed = submitProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await options.engine.submitProject(parsed.data.projectSlug);
+      options.scheduler.schedule();
+      return reply.code(202).send(result);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+  });
+
+  server.get("/projects/:slug/status", async (request, reply) => {
+    const parsed = z.object({ slug: z.string().min(1) }).safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      return options.engine.getProjectStatus(parsed.data.slug);
     } catch (error) {
       return reply.code(400).send({ error: errorMessage(error) });
     }

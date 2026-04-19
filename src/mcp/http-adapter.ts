@@ -8,6 +8,8 @@ export interface LoomHttpAdapter {
   cancelRun(runId: string): Promise<unknown>;
   retryRun(runId: string): Promise<unknown>;
   cleanupWorkspace(projectSlug: string): Promise<unknown>;
+  submitProject(projectSlug: string): Promise<unknown>;
+  getProjectStatus(projectSlug: string): Promise<unknown>;
 }
 
 export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapter {
@@ -21,5 +23,9 @@ export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapt
     retryRun: (runId) => requestJson(options, "POST", `/runs/${encodeURIComponent(runId)}/retry`),
     cleanupWorkspace: (projectSlug) =>
       requestJson(options, "POST", "/workspace/cleanup", { projectSlug }),
+    submitProject: (projectSlug) =>
+      requestJson(options, "POST", "/projects/submit", { projectSlug }),
+    getProjectStatus: (projectSlug) =>
+      requestJson(options, "GET", `/projects/${encodeURIComponent(projectSlug)}/status`),
   };
 }
