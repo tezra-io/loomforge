@@ -6,7 +6,6 @@ import { execaCommand } from "execa";
 import type {
   VerificationCommandResult,
   VerificationResult,
-  VerificationRunner as IVerificationRunner,
   WorkflowStepContext,
 } from "../workflow/types.js";
 import { isExecaTimedOut, isTimedOut } from "./timeout.js";
@@ -15,7 +14,7 @@ export interface VerificationRunnerOptions {
   artifactDir: string;
 }
 
-export class VerificationRunner implements IVerificationRunner {
+export class VerificationRunner {
   private readonly artifactDir: string;
 
   constructor(options: VerificationRunnerOptions) {

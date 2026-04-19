@@ -3,7 +3,6 @@ import type {
   IssueSnapshot,
   LinearWorkflowClient,
   ReviewerRunner,
-  VerificationRunner,
   WorktreeManager,
 } from "../workflow/index.js";
 
@@ -11,7 +10,6 @@ export interface StubWorkflowDependencies {
   linear: LinearWorkflowClient;
   worktrees: WorktreeManager;
   builder: BuilderRunner;
-  verifier: VerificationRunner;
   reviewer: ReviewerRunner;
 }
 
@@ -27,6 +25,7 @@ export function createStubWorkflowDependencies(): StubWorkflowDependencies {
         comments: [],
         priority: null,
       }),
+      listProjectIssues: async () => [],
       updateIssueStatus: async () => {
         return;
       },
@@ -56,19 +55,6 @@ export function createStubWorkflowDependencies(): StubWorkflowDependencies {
         outcome: "success",
         summary: "Stub push completed.",
         rawLogPath: "stub://push.log",
-      }),
-    },
-    verifier: {
-      verify: async ({ project }) => ({
-        outcome: "pass",
-        summary: "Stub verification passed.",
-        rawLogPath: "stub://verify.log",
-        commandResults: project.verification.commands.map((command) => ({
-          name: command.name,
-          command: command.command,
-          outcome: "pass",
-          rawLogPath: `stub://verify/${command.name}.log`,
-        })),
       }),
     },
     reviewer: {

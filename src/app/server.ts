@@ -1,3 +1,4 @@
+import { readdirSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -23,11 +24,20 @@ export interface RunningLoomServer {
 }
 
 export async function startLoomServer(options: StartServerOptions): Promise<RunningLoomServer> {
-  const logger = pino({ level: options.logLevel ?? "info" });
+  const logDir = join(homedir(), ".loomforge", "logs");
+  mkdirSync(logDir, { recursive: true });
+
+  const logFile = join(logDir, `loomforge-${todayStamp()}.log`);
+  pruneOldLogs(logDir, 7);
+
+  const logger = pino(
+    { level: options.logLevel ?? "info" },
+    pino.multistream([{ stream: pino.destination(1) }, { stream: pino.destination(logFile) }]),
+  );
   const home = homedir();
   const registry = await loadProjectConfigRegistry(options.configPath, { homeDir: home });
 
-  const globalConfigPath = join(home, ".loom", "config.yaml");
+  const globalConfigPath = join(home, ".loomforge", "config.yaml");
   let globalConfig;
   try {
     globalConfig = await loadGlobalConfig(globalConfigPath);
@@ -74,4 +84,33 @@ function isFileNotFound(error: unknown): boolean {
   return (
     error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
   );
+}
+
+function todayStamp(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function pruneOldLogs(logDir: string, retainDays: number): void {
+  const cutoff = Date.now() - retainDays * 86_400_000;
+  let entries: string[];
+  try {
+    entries = readdirSync(logDir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    const match = /^loomforge-(\d{4}-\d{2}-\d{2})\.log$/.exec(name);
+    if (!match?.[1]) continue;
+    if (new Date(match[1]).getTime() < cutoff) {
+      try {
+        unlinkSync(join(logDir, name));
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
 }

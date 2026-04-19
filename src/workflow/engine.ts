@@ -8,35 +8,44 @@ import type {
   BlockedReason,
   BuilderResult,
   CancelReason,
+  EngineLogger,
   FailedReason,
   FailureReason,
   IssueSnapshot,
-  ReviewResult,
   RevisionInput,
   RunAttemptRecord,
   RunEvent,
   RunHandoff,
   RunRecord,
   RunState,
+  SubmitProjectResult,
   SubmitRunInput,
   SubmitRunResult,
-  VerificationResult,
   CleanupWorkspaceResult,
+  ProjectCompletionResult,
   WorkflowEngineOptions,
   WorkflowStepContext,
   WorkspaceSnapshot,
 } from "./types.js";
+
+const noopLogger: EngineLogger = {
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
 
 export class WorkflowEngine {
   private activeRunId: string | null = null;
   private readonly queue: string[] = [];
   private readonly runs = new Map<string, RunRecord>();
   private readonly options: WorkflowEngineOptions;
+  private readonly log: EngineLogger;
   private readonly newId: () => string;
   private readonly now: () => string;
 
   constructor(options: WorkflowEngineOptions) {
     this.options = options;
+    this.log = options.logger ?? noopLogger;
     this.newId = options.newId ?? randomUUID;
     this.now = options.now ?? (() => new Date().toISOString());
     this.recoverPersistedRuns();
@@ -67,6 +76,40 @@ export class WorkflowEngine {
     };
   }
 
+  async submitProject(projectSlug: string): Promise<SubmitProjectResult> {
+    const project = this.projectForSlug(projectSlug);
+    const issues = await this.options.linear.listProjectIssues(project);
+    const activeIssueIds = this.activeIssueIdsForProject(projectSlug);
+
+    const enqueued: SubmitProjectResult["enqueued"] = [];
+    const skipped: SubmitProjectResult["skipped"] = [];
+
+    for (const issue of issues) {
+      if (activeIssueIds.has(issue.identifier)) {
+        skipped.push({ issueId: issue.identifier, reason: "already_active" });
+        continue;
+      }
+
+      this.options.store?.saveProject(project);
+      const run = this.createRun(projectSlug, issue.identifier);
+      this.queue.push(run.id);
+      this.refreshQueuePositions();
+      this.persistRun(run);
+      enqueued.push({
+        runId: run.id,
+        issueId: issue.identifier,
+        queuePosition: run.queuePosition ?? this.queue.length,
+      });
+    }
+
+    return {
+      projectSlug,
+      enqueued,
+      skipped,
+      totalIssues: issues.length,
+    };
+  }
+
   getRun(runId: string): RunRecord {
     const run = this.runs.get(runId);
     if (!run) {
@@ -77,6 +120,35 @@ export class WorkflowEngine {
 
   getQueue(): RunRecord[] {
     return this.queue.map((runId) => this.getRun(runId));
+  }
+
+  getProjectStatus(projectSlug: string): ProjectCompletionResult & { done: boolean } {
+    this.projectForSlug(projectSlug);
+    const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
+
+    const shipped: string[] = [];
+    const failed: string[] = [];
+    const blocked: string[] = [];
+    const cancelled: string[] = [];
+    const inProgress: string[] = [];
+
+    for (const r of projectRuns) {
+      if (r.state === "shipped") shipped.push(r.issueId);
+      else if (r.state === "failed") failed.push(r.issueId);
+      else if (r.state === "blocked") blocked.push(r.issueId);
+      else if (r.state === "cancelled") cancelled.push(r.issueId);
+      else inProgress.push(r.issueId);
+    }
+
+    return {
+      done: inProgress.length === 0 && projectRuns.length > 0,
+      projectSlug,
+      shipped,
+      failed,
+      blocked,
+      cancelled,
+      pullRequestUrl: null,
+    };
   }
 
   cancelRun(runId: string, reason: CancelReason = "operator_cancel"): RunRecord {
@@ -135,9 +207,13 @@ export class WorkflowEngine {
     run.queuePosition = null;
     this.persistRun(run);
     this.activeRunId = run.id;
+    this.log.info({ runId: run.id, issueId: run.issueId }, "executing run");
 
     try {
       await this.executeRun(run);
+      if (isTerminalState(run.state)) {
+        await this.checkProjectCompletion(run.projectSlug);
+      }
       return run;
     } finally {
       this.activeRunId = null;
@@ -176,6 +252,10 @@ export class WorkflowEngine {
         });
         return;
       }
+      this.log.error(
+        { runId: run.id, error: error instanceof Error ? error.message : String(error) },
+        "run execution error",
+      );
       this.failInterruptedRun(run, error);
     }
   }
@@ -194,39 +274,60 @@ export class WorkflowEngine {
 
     run.workspace = prepared.workspace;
     this.persistRun(run);
-    await this.runAttemptsUntilReviewPasses(run, project, issue, prepared.workspace);
+    await this.buildReviewAndPush(run, project, issue, prepared.workspace);
   }
 
-  private async runAttemptsUntilReviewPasses(
+  private async buildReviewAndPush(
     run: RunRecord,
     project: ProjectConfig,
     issue: IssueSnapshot,
     workspace: WorkspaceSnapshot,
   ): Promise<void> {
-    let revisionInput: RevisionInput | null = null;
+    const attempt = this.createAttempt(run);
+    const buildOk = await this.buildStep(run, project, issue, workspace, attempt, null);
+    if (!buildOk) return;
 
-    while (!isTerminalState(run.state)) {
-      const attempt = this.createAttempt(run);
-      const outcome = await this.runAttempt(run, project, issue, workspace, attempt, revisionInput);
-      if (outcome === "review_passed") {
-        await this.pushReviewedRun(run, project, issue, workspace, attempt);
-        return;
-      }
-      if (outcome === "terminal") {
-        return;
-      }
-      revisionInput = outcome;
+    const context = { run, project, issue, workspace, attempt, revisionInput: null };
+    const reviewOutcome = await this.reviewStep(run, project, issue, attempt, context);
+    if (reviewOutcome === "terminal") return;
+
+    if (reviewOutcome === "revise") {
+      const revision: RevisionInput = {
+        source: "review",
+        summary: attempt.reviewResult?.summary ?? "",
+        findings: attempt.reviewResult?.findings ?? [],
+      };
+      run.revisionCount += 1;
+      attempt.outcome = "revision_requested";
+      this.touchAttempt(attempt);
+      this.recordEvent(run, "revision_requested", "revising", { source: "review" });
+      await this.transitionAndSync(run, project, issue, "revising");
+
+      const revisionAttempt = this.createAttempt(run);
+      const revisionBuildOk = await this.buildStep(
+        run,
+        project,
+        issue,
+        workspace,
+        revisionAttempt,
+        revision,
+      );
+      if (!revisionBuildOk) return;
     }
+
+    const pushAttempt = run.attempts.at(-1);
+    if (!pushAttempt) return;
+    await this.pushReviewedRun(run, project, issue, workspace, pushAttempt);
   }
 
-  private async runAttempt(
+  private async buildStep(
     run: RunRecord,
     project: ProjectConfig,
     issue: IssueSnapshot,
     workspace: WorkspaceSnapshot,
     attempt: RunAttemptRecord,
     revisionInput: RevisionInput | null,
-  ): Promise<"review_passed" | "terminal" | RevisionInput> {
+  ): Promise<boolean> {
     await this.transitionAndSync(run, project, issue, "building");
     const context = { run, project, issue, workspace, attempt, revisionInput };
     const build = await this.options.builder.build(context);
@@ -235,56 +336,22 @@ export class WorkflowEngine {
 
     if (build.outcome !== "success") {
       await this.finishBuilderFailure(run, project, issue, build);
-      return "terminal";
+      return false;
     }
     if (!build.commitSha) {
       await this.finishFailed(run, project, issue, "runner_error", { summary: build.summary });
-      return "terminal";
+      return false;
     }
-
-    return await this.verifyAndReview(run, project, issue, workspace, attempt, context);
+    return true;
   }
 
-  private async verifyAndReview(
+  private async reviewStep(
     run: RunRecord,
     project: ProjectConfig,
     issue: IssueSnapshot,
-    workspace: WorkspaceSnapshot,
     attempt: RunAttemptRecord,
     context: WorkflowStepContext,
-  ): Promise<"review_passed" | "terminal" | RevisionInput> {
-    await this.transitionAndSync(run, project, issue, "verifying");
-    const verification = await this.options.verifier.verify(context);
-    attempt.verificationResult = verification;
-    this.touchAttempt(attempt);
-
-    if (verification.outcome === "blocked") {
-      await this.finishBlocked(run, project, issue, "env_failure", {
-        summary: verification.summary,
-      });
-      return "terminal";
-    }
-    if (verification.outcome === "fail") {
-      if (verification.failureReason === "timeout") {
-        await this.finishFailed(run, project, issue, "timeout", {
-          summary: verification.summary,
-        });
-        return "terminal";
-      }
-      return await this.reviseOrFailVerification(run, project, issue, attempt, verification);
-    }
-
-    return await this.reviewVerifiedAttempt(run, project, issue, workspace, attempt, context);
-  }
-
-  private async reviewVerifiedAttempt(
-    run: RunRecord,
-    project: ProjectConfig,
-    issue: IssueSnapshot,
-    _workspace: WorkspaceSnapshot,
-    attempt: RunAttemptRecord,
-    context: WorkflowStepContext,
-  ): Promise<"review_passed" | "terminal" | RevisionInput> {
+  ): Promise<"pass" | "revise" | "terminal"> {
     await this.transitionAndSync(run, project, issue, "reviewing");
     const review = await this.options.reviewer.review(context);
     attempt.reviewResult = review;
@@ -293,7 +360,7 @@ export class WorkflowEngine {
     if (review.outcome === "pass") {
       attempt.outcome = "review_passed";
       this.touchAttempt(attempt);
-      return "review_passed";
+      return "pass";
     }
     if (review.outcome === "blocked") {
       await this.finishBlocked(run, project, issue, "review_loop_exhausted", {
@@ -301,71 +368,7 @@ export class WorkflowEngine {
       });
       return "terminal";
     }
-
-    return await this.reviseOrBlockReview(run, project, issue, attempt, review);
-  }
-
-  private async reviseOrFailVerification(
-    run: RunRecord,
-    project: ProjectConfig,
-    issue: IssueSnapshot,
-    attempt: RunAttemptRecord,
-    verification: VerificationResult,
-  ): Promise<"terminal" | RevisionInput> {
-    if (!this.canRevise(run, project)) {
-      await this.finishFailed(run, project, issue, "verification_failed", {
-        summary: verification.summary,
-      });
-      return "terminal";
-    }
-
-    const revision = {
-      source: "verification" as const,
-      summary: verification.summary,
-      findings: [],
-    };
-    await this.requestRevision(run, project, issue, attempt, revision);
-    return revision;
-  }
-
-  private async reviseOrBlockReview(
-    run: RunRecord,
-    project: ProjectConfig,
-    issue: IssueSnapshot,
-    attempt: RunAttemptRecord,
-    review: ReviewResult,
-  ): Promise<"terminal" | RevisionInput> {
-    if (!this.canRevise(run, project)) {
-      await this.finishBlocked(run, project, issue, "review_loop_exhausted", {
-        summary: review.summary,
-      });
-      return "terminal";
-    }
-
-    const revision = {
-      source: "review" as const,
-      summary: review.summary,
-      findings: review.findings,
-    };
-    await this.requestRevision(run, project, issue, attempt, revision);
-    return revision;
-  }
-
-  private async requestRevision(
-    run: RunRecord,
-    project: ProjectConfig,
-    issue: IssueSnapshot,
-    attempt: RunAttemptRecord,
-    revision: RevisionInput,
-  ): Promise<void> {
-    run.revisionCount += 1;
-    attempt.outcome = "revision_requested";
-    this.touchAttempt(attempt);
-    this.recordEvent(run, "revision_requested", "revising", {
-      revisionCount: run.revisionCount,
-      source: revision.source,
-    });
-    await this.transitionAndSync(run, project, issue, "revising");
+    return "revise";
   }
 
   private async pushReviewedRun(
@@ -442,10 +445,17 @@ export class WorkflowEngine {
       return;
     }
 
-    this.transitionRun(run, "failed", {
-      failureReason: "runner_error",
+    const project = this.projectForSlug(run.projectSlug);
+    const opts = {
+      failureReason: "runner_error" as const,
       details: { error: error instanceof Error ? error.message : String(error) },
-    });
+    };
+
+    if (run.issueSnapshot) {
+      void this.transitionAndSync(run, project, run.issueSnapshot, "failed", opts);
+    } else {
+      this.transitionRun(run, "failed", opts);
+    }
   }
 
   private async transitionAndSync(
@@ -481,11 +491,22 @@ export class WorkflowEngine {
       details?: Record<string, unknown>;
     } = {},
   ): void {
+    const prevState = run.state;
     run.state = state;
     run.updatedAt = this.now();
     run.failureReason = options.failureReason ?? null;
     this.recordEvent(run, "state_transition", state, options.details ?? {});
     this.persistRun(run);
+
+    const logData = { runId: run.id, issueId: run.issueId, from: prevState, to: state };
+    if (state === "failed" || state === "blocked") {
+      this.log.warn(
+        { ...logData, failureReason: options.failureReason, details: options.details },
+        `run ${state}`,
+      );
+    } else {
+      this.log.info(logData, `run ${prevState} → ${state}`);
+    }
   }
 
   private createRun(projectSlug: string, issueId: string): RunRecord {
@@ -566,8 +587,80 @@ export class WorkflowEngine {
     };
   }
 
-  private canRevise(run: RunRecord, project: ProjectConfig): boolean {
-    return run.revisionCount < project.review.maxRevisionLoops;
+  private activeIssueIdsForProject(projectSlug: string): Set<string> {
+    const ids = new Set<string>();
+    for (const run of this.runs.values()) {
+      if (run.projectSlug === projectSlug && !isTerminalState(run.state)) {
+        ids.add(run.issueId);
+      }
+    }
+    return ids;
+  }
+
+  private async checkProjectCompletion(projectSlug: string): Promise<void> {
+    const activeIds = this.activeIssueIdsForProject(projectSlug);
+    if (activeIds.size > 0) return;
+
+    const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
+    if (projectRuns.length === 0) return;
+
+    const shipped: string[] = [];
+    const failed: string[] = [];
+    const blocked: string[] = [];
+    const cancelled: string[] = [];
+
+    for (const r of projectRuns) {
+      if (r.state === "shipped") shipped.push(r.issueId);
+      else if (r.state === "failed") failed.push(r.issueId);
+      else if (r.state === "blocked") blocked.push(r.issueId);
+      else if (r.state === "cancelled") cancelled.push(r.issueId);
+    }
+
+    let pullRequestUrl: string | null = null;
+    if (shipped.length > 0 && this.options.pullRequests) {
+      const project = this.projectForSlug(projectSlug);
+      const title = `[${projectSlug}] Merge dev → ${project.defaultBranch}`;
+      const body = [
+        `## Shipped issues (${shipped.length})`,
+        ...shipped.map((id) => `- ${id}`),
+        "",
+        ...(failed.length > 0
+          ? [`## Failed (${failed.length})`, ...failed.map((id) => `- ${id}`), ""]
+          : []),
+        ...(blocked.length > 0
+          ? [`## Blocked (${blocked.length})`, ...blocked.map((id) => `- ${id}`), ""]
+          : []),
+      ].join("\n");
+
+      try {
+        const pr = await this.options.pullRequests.createPr(project, title, body);
+        pullRequestUrl = pr?.url ?? null;
+        if (pullRequestUrl) {
+          this.log.info({ projectSlug, pullRequestUrl }, "created PR for project");
+        }
+      } catch (error: unknown) {
+        this.log.warn(
+          { projectSlug, error: error instanceof Error ? error.message : String(error) },
+          "failed to create PR",
+        );
+      }
+    }
+
+    const result: ProjectCompletionResult = {
+      projectSlug,
+      shipped,
+      failed,
+      blocked,
+      cancelled,
+      pullRequestUrl,
+    };
+
+    this.log.info(
+      { projectSlug, shipped: shipped.length, failed: failed.length, blocked: blocked.length },
+      "project complete",
+    );
+
+    this.options.onProjectComplete?.(result);
   }
 
   private isIdle(): boolean {

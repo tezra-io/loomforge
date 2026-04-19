@@ -173,6 +173,13 @@ export interface SubmitRunRejected {
 
 export type SubmitRunResult = SubmitRunAccepted | SubmitRunRejected;
 
+export interface SubmitProjectResult {
+  projectSlug: string;
+  enqueued: Array<{ runId: string; issueId: string; queuePosition: number }>;
+  skipped: Array<{ issueId: string; reason: string }>;
+  totalIssues: number;
+}
+
 export interface PrepareWorkspaceSuccess {
   outcome: "success";
   workspace: WorkspaceSnapshot;
@@ -203,8 +210,16 @@ export interface PushContext {
   attempt: RunAttemptRecord;
 }
 
+export interface LinearIssueSummary {
+  identifier: string;
+  title: string;
+  priority: number;
+  number: number;
+}
+
 export interface LinearWorkflowClient {
   fetchIssue(project: ProjectConfig, issueId: string): Promise<IssueSnapshot>;
+  listProjectIssues(project: ProjectConfig): Promise<LinearIssueSummary[]>;
   updateIssueStatus(
     project: ProjectConfig,
     issue: IssueSnapshot,
@@ -225,10 +240,6 @@ export interface WorktreeManager {
 export interface BuilderRunner {
   build(context: WorkflowStepContext): Promise<BuilderResult>;
   push(context: PushContext): Promise<PushResult>;
-}
-
-export interface VerificationRunner {
-  verify(context: WorkflowStepContext): Promise<VerificationResult>;
 }
 
 export interface ReviewerRunner {
@@ -269,15 +280,36 @@ export interface WorkflowRunStore {
   }>;
 }
 
+export interface ProjectCompletionResult {
+  projectSlug: string;
+  shipped: string[];
+  failed: string[];
+  blocked: string[];
+  cancelled: string[];
+  pullRequestUrl: string | null;
+}
+
+export interface EngineLogger {
+  info(obj: Record<string, unknown>, msg: string): void;
+  warn(obj: Record<string, unknown>, msg: string): void;
+  error(obj: Record<string, unknown>, msg: string): void;
+}
+
+export interface PullRequestCreator {
+  createPr(project: ProjectConfig, title: string, body: string): Promise<{ url: string } | null>;
+}
+
 export interface WorkflowEngineOptions {
   registry: ProjectConfigRegistry;
   linear: LinearWorkflowClient;
   worktrees: WorktreeManager;
   builder: BuilderRunner;
-  verifier: VerificationRunner;
   reviewer: ReviewerRunner;
   store?: WorkflowRunStore;
   artifacts?: ArtifactWriter;
+  logger?: EngineLogger;
+  pullRequests?: PullRequestCreator;
+  onProjectComplete?: (result: ProjectCompletionResult) => void;
   newId?: () => string;
   now?: () => string;
 }
