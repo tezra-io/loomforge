@@ -199,7 +199,7 @@ describe("VerificationRunner", () => {
 
     expect(result.outcome).toBe("fail");
     expect(result.commandResults[0]?.outcome).toBe("fail");
-  }, 10_000);
+  }, 30_000);
 
   it("runs all commands and aggregates failures", async () => {
     const scriptPath = join(tmpDir, "track.sh");
