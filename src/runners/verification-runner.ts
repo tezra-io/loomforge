@@ -50,6 +50,7 @@ export class VerificationRunner {
         const result = await execaCommand(cmd.command, {
           cwd: workspace.path,
           timeout: cmd.timeoutMs,
+          forceKillAfterDelay: 500,
           shell: true,
           reject: false,
           all: true,
