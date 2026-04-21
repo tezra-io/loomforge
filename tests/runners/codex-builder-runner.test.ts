@@ -94,6 +94,8 @@ beforeEach(async () => {
   await execa("mkdir", ["-p", binDir]);
   await execa("mkdir", ["-p", artifactDir]);
   await execa("git", ["init", repoDir]);
+  await execa("git", ["-C", repoDir, "config", "user.email", "test@test.com"]);
+  await execa("git", ["-C", repoDir, "config", "user.name", "Test"]);
   await execa("git", ["-C", repoDir, "commit", "--allow-empty", "-m", "init"]);
   await execa("git", ["-C", repoDir, "checkout", "-b", "dev"]);
 
