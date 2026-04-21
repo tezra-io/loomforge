@@ -1,13 +1,11 @@
 ```
-  _                        __
- | |    ___   ___  _ __ ___ / _| ___  _ __ __ _  ___
- | |   / _ \ / _ \| '_ ` _ \ |_ / _ \| '__/ _` |/ _ \
- | |__| (_) | (_) | | | | | |  | (_) | | | (_| |  __/
- |_____\___/ \___/|_| |_| |_|_| \___/|_|  \__, |\___|
-                                           |___/
+ ██╗      ██████╗  ██████╗ ███╗   ███╗███████╗ ██████╗ ██████╗  ██████╗ ███████╗
+ ██║     ██╔═══██╗██╔═══██╗████╗ ████║██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝
+ ██║     ██║   ██║██║   ██║██╔████╔██║█████╗  ██║   ██║██████╔╝██║  ███╗█████╗
+ ██║     ██║   ██║██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝
+ ███████╗╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
+ ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 ```
-
-# Loomforge
 
 A local workflow engine that automates the path from Linear issue to pull
 request. It runs an agentic build → review → PR pipeline — fully unattended.
@@ -52,10 +50,10 @@ a heavyweight platform.
 I've been running an overnight build pipeline since the early days of OpenClaw.
 After brainstorming designs with OpenClaw and Claude during the day, a nightly
 cron job would pick up the Linear issues, use Claude to build and Codex to
-review, and move issues to Done by morning. It worked — until it didn't.
+review, and move issues to Done by morning. It worked - until it didn't.
 Breaking changes in Claude's tool use, instability in OpenClaw's ACP protocol,
 and fragile skill wiring meant the workflow would silently break every few
-weeks. I looked at Paperclip, but it carries too much weight — multi-tenant,
+weeks. I looked at Paperclip, but it carries too much weight - multi-tenant,
 Postgres, plugin marketplace — for what is fundamentally a single-developer
 overnight build loop. Loomforge is the lighter, purpose-built replacement:
 same pipeline, fewer moving parts, easy to fix when something changes.
@@ -73,24 +71,22 @@ same pipeline, fewer moving parts, easy to fix when something changes.
 ## Quick Start (npm)
 
 ```sh
-npm install -g loomforge
+npm install -g @tezra-io/loomforge
 ```
 
 The installer scaffolds `~/.loomforge/` with default config files and attempts
-to register the daemon and install the agent skill. If any optional step fails,
-it prints a fallback command you can run manually.
+to register the daemon (launchd on macOS, systemd on Linux).
 
-| Step | Detail | Fallback if skipped |
-|------|--------|---------------------|
-| CLI | `loomforge` available on PATH | — (always succeeds) |
-| Config | `~/.loomforge/config.yaml` and `loom.yaml` | — (always succeeds) |
-| Daemon | launchd (macOS) or systemd (Linux) | `loomforge start` |
-| Skill | Installed via `npx skills` | `npx skills add tezra-io/loomforge` |
+Then run the interactive setup:
 
-> **Note:** Daemon auto-registration is supported on macOS and Linux only.
-> On other platforms, start the daemon manually with `loomforge start`.
+```sh
+loomforge setup
+```
 
-After install, configure your Linear API key and add a project
+This validates your config, installs the agent skill (prompts you to choose
+target agents), and prints next steps.
+
+After setup, configure your Linear API key and add a project
 (see [Configuration](#configuration)).
 
 ---
@@ -106,15 +102,13 @@ pnpm install
 pnpm run build
 ```
 
-Link the CLI globally and run the setup:
+Link the CLI globally and run setup:
 
 ```sh
 pnpm link --global
-node scripts/postinstall.js
+node scripts/postinstall.js   # scaffold ~/.loomforge/ and register daemon
+loomforge setup               # install agent skill, validate config
 ```
-
-This scaffolds `~/.loomforge/` and attempts to register the daemon and install
-the agent skill — the same steps that `npm install -g` runs automatically.
 
 After setup, configure your Linear API key and add a project
 (see [Configuration](#configuration)).

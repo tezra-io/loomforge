@@ -12,6 +12,8 @@ import { GitWorkspaceManager } from "../worktrees/index.js";
 import { GhPullRequestCreator } from "../worktrees/pull-request-creator.js";
 import { createDrainScheduler, type DrainScheduler } from "./drain-scheduler.js";
 
+const linearApiKeyPlaceholder = "lin_api_YOUR_KEY_HERE";
+
 export interface LoomRuntime {
   engine: WorkflowEngine;
   scheduler: DrainScheduler;
@@ -36,7 +38,7 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   const builder = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
   const reviewer = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
   const worktrees = new GitWorkspaceManager();
-  const linearApiKey = options.globalConfig?.linear.apiKey ?? process.env.LINEAR_API_KEY;
+  const linearApiKey = resolveLinearApiKey(options.globalConfig?.linear.apiKey, process.env);
   const linear = linearApiKey
     ? new LinearWorkflowClientImpl(linearApiKey)
     : createMissingKeyClient();
@@ -77,4 +79,17 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
       store.close();
     },
   };
+}
+
+export function resolveLinearApiKey(
+  configuredKey: string | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const trimmedConfiguredKey = configuredKey?.trim();
+  if (trimmedConfiguredKey && trimmedConfiguredKey !== linearApiKeyPlaceholder) {
+    return trimmedConfiguredKey;
+  }
+
+  const envKey = env.LINEAR_API_KEY?.trim();
+  return envKey || undefined;
 }

@@ -31,6 +31,14 @@ jobs:
 
       - run: pnpm run build
 
+      - run: pnpm run typecheck
+
+      - run: pnpm run test
+
+      - run: pnpm run lint
+
+      - run: pnpm run format
+
       - name: Create release PR or publish
         uses: changesets/action@v1
         with:

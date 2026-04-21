@@ -10,13 +10,16 @@ import { startLoomServer } from "../app/server.js";
 import { createHttpAdapter } from "../mcp/http-adapter.js";
 import { createMcpServer } from "../mcp/server.js";
 import { requestJson } from "./http-client.js";
+import { runSetup, type RunSetupOptions } from "./setup.js";
 
 export interface CreateCliProgramOptions {
   write?: (text: string) => void;
+  runSetup?: (options?: RunSetupOptions) => Promise<void> | void;
 }
 
 export function createCliProgram(options: CreateCliProgramOptions = {}): Command {
   const write = options.write ?? ((text: string) => process.stdout.write(text));
+  const runSetupCommand = options.runSetup ?? runSetup;
   const program = new Command();
 
   program
@@ -149,6 +152,13 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
           `/runs/${encodeURIComponent(runId)}/retry`,
         ),
       );
+    });
+
+  program
+    .command("setup")
+    .description("Validate config, install agent skill, and show next steps")
+    .action(async () => {
+      await runSetupCommand({ write });
     });
 
   program

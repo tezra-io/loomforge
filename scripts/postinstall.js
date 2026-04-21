@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { homedir, platform } from "node:os";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 
 const manualRun = !process.env.npm_lifecycle_event;
 const isLocalDev = process.env.INIT_CWD && existsSync(join(process.env.INIT_CWD, "src"));
 const isCI = !!(process.env.CI || process.env.GITHUB_ACTIONS);
+const isGlobalInstall =
+  process.env.npm_config_global === "true" ||
+  process.env.npm_config_location === "global";
 
-if (!manualRun && (isLocalDev || isCI)) {
+if (!manualRun && (isLocalDev || isCI || !isGlobalInstall)) {
   process.exit(0);
 }
 
@@ -95,21 +97,7 @@ if (os === "darwin") {
   daemonInstalled = installSystemd();
 }
 
-// 3. Install skill via skills CLI
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const skillPath = join(__dirname, "..", "skills", "loom");
-let skillInstalled = false;
-try {
-  execFileSync("npx", ["--yes", "skills", "add", skillPath], {
-    stdio: "pipe",
-    timeout: 30_000,
-  });
-  skillInstalled = true;
-} catch {
-  // skills CLI not available or failed
-}
-
-// 4. Print summary
+// 3. Print summary
 console.log("");
 console.log(`  ${cyan}${bold}loomforge${reset} installed successfully.`);
 console.log("");
@@ -121,22 +109,14 @@ if (daemonInstalled) {
   console.log(`  ${yellow}○${reset} Daemon not registered — run ${bold}loomforge start${reset} manually`);
 }
 
-if (skillInstalled) {
-  console.log(`  ${green}✓${reset} Agent skill installed`);
-} else {
-  console.log(`  ${yellow}○${reset} Agent skill — run ${bold}npx skills add tezra-io/loomforge${reset}`);
-}
-
 console.log("");
-console.log("  To get started:");
-console.log(`    1. Add your Linear API key:  ${bold}~/.loomforge/config.yaml${reset}`);
-console.log(`    2. Add a project:            ${bold}~/.loomforge/loom.yaml${reset}`);
+console.log("  Next steps:");
+console.log(`    1. Run setup:                ${bold}loomforge setup${reset}`);
+console.log(`    2. Add your Linear API key:  ${bold}~/.loomforge/config.yaml${reset}`);
+console.log(`    3. Add a project:            ${bold}~/.loomforge/loom.yaml${reset}`);
 if (!daemonInstalled) {
-  console.log(`    3. Start the daemon:         ${bold}loomforge start${reset}`);
+  console.log(`    4. Start the daemon:         ${bold}loomforge start${reset}`);
 }
-console.log("");
-console.log(`  ${dim}Optional: install MCP server for agent integration${reset}`);
-console.log(`    ${bold}npx add-mcp loomforge -- loomforge mcp-serve${reset}`);
 console.log("");
 
 // --- Daemon installers ---

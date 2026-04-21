@@ -155,7 +155,9 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient {
 
 export function createMissingKeyClient(): LinearWorkflowClient {
   const err = () => {
-    throw new LinearAuthError("Linear API key not configured — add it to ~/.loomforge/config.yaml");
+    throw new LinearAuthError(
+      "Linear API key not configured — add it to ~/.loomforge/config.yaml or set LINEAR_API_KEY",
+    );
   };
   return {
     fetchIssue: err,
