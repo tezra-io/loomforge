@@ -1,6 +1,6 @@
 ---
 name: loomforge
-description: Interact with the Loomforge workflow engine for agentic software delivery. Use whenever the user wants to submit Linear issues for building, check build/run status, manage the build queue, troubleshoot failed or blocked runs, kick off a nightly build, or ship issues for a project. Also use when the user asks about Loomforge setup, daemon health, or project configuration. Loomforge handles the full lifecycle: Linear fetch, build, review, push, pull request creation, and Linear status sync.
+description: "Interact with the Loomforge workflow engine for agentic software delivery. Use whenever the user wants to submit Linear issues for building, check build/run status, manage the build queue, troubleshoot failed or blocked runs, kick off a nightly build, or ship issues for a project. Also use when the user asks about Loomforge setup, daemon health, or project configuration. Loomforge handles the full lifecycle: Linear fetch, build, review, push, pull request creation, and Linear status sync."
 ---
 
 # Loomforge Workflow Engine

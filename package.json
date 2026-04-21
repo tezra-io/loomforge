@@ -40,7 +40,7 @@
     "test:watch": "vitest",
     "prepare": "husky",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && node scripts/sync-version.js",
     "release": "changeset publish"
   },
   "lint-staged": {

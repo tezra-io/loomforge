@@ -16,6 +16,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -39,9 +41,18 @@ jobs:
 
       - run: pnpm run format
 
+      - name: Verify npm publish access
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm whoami
+          npm access list packages @tezra-io > /tmp/npm-scope-packages.txt
+          echo "npm publish access verified for @tezra-io"
+
       - name: Create release PR or publish
         uses: changesets/action@v1
         with:
+          version: pnpm run version-packages
           publish: pnpm changeset publish
           title: "chore: version packages"
           commit: "chore: version packages"
