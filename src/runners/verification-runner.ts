@@ -1,14 +1,12 @@
+import { spawn } from "node:child_process";
 import { writeFile, mkdir, access } from "node:fs/promises";
 import { join } from "node:path";
-
-import { execaCommand } from "execa";
 
 import type {
   VerificationCommandResult,
   VerificationResult,
   WorkflowStepContext,
 } from "../workflow/types.js";
-import { isExecaTimedOut, isTimedOut } from "./timeout.js";
 
 export interface VerificationRunnerOptions {
   artifactDir: string;
@@ -46,102 +44,44 @@ export class VerificationRunner {
     for (const cmd of commands) {
       const logPath = join(scopedDir, `verify-${cmd.name}.log`);
 
-      try {
-        const result = await execaCommand(cmd.command, {
-          cwd: workspace.path,
-          timeout: cmd.timeoutMs,
-          forceKillAfterDelay: 500,
-          shell: true,
-          reject: false,
-          all: true,
-        });
+      const result = await runShellCommand(cmd.command, workspace.path, cmd.timeoutMs);
+      await writeFile(logPath, formatCommandLog(cmd.command, result), "utf8");
 
-        const exitCode = result.exitCode ?? 1;
-
-        const logContent = [
-          `command: ${cmd.command}`,
-          `exit_code: ${exitCode}`,
-          `---stdout---`,
-          result.stdout,
-          `---stderr---`,
-          result.stderr,
-        ].join("\n");
-
-        await writeFile(logPath, logContent, "utf8");
-
-        if (isExecaTimedOut(result)) {
-          return {
-            outcome: "fail",
-            summary: `Command "${cmd.name}" timed out after ${cmd.timeoutMs}ms`,
-            rawLogPath: logPath,
-            commandResults: [
-              ...commandResults,
-              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
-            ],
-            failureReason: "timeout",
-          };
-        }
-
-        if (isEnvFailure(exitCode, result.stderr)) {
-          return {
-            outcome: "blocked",
-            summary: `Environment failure running "${cmd.name}": ${result.stderr || "command not found"}`,
-            rawLogPath: logPath,
-            commandResults: [
-              ...commandResults,
-              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
-            ],
-            failureReason: "env_failure",
-          };
-        }
-
-        const passed = exitCode === 0;
-        commandResults.push({
-          name: cmd.name,
-          command: cmd.command,
-          outcome: passed ? "pass" : "fail",
-          rawLogPath: logPath,
-        });
-
-        if (!passed) {
-          hasFailed = true;
-        }
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        await writeFile(logPath, `error: ${message}`, "utf8");
-
-        if (isTimedOut(error)) {
-          return {
-            outcome: "fail",
-            summary: `Command "${cmd.name}" timed out after ${cmd.timeoutMs}ms`,
-            rawLogPath: logPath,
-            commandResults: [
-              ...commandResults,
-              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
-            ],
-            failureReason: "timeout",
-          };
-        }
-
-        if (isSpawnError(error)) {
-          return {
-            outcome: "blocked",
-            summary: `Environment failure running "${cmd.name}": ${message}`,
-            rawLogPath: logPath,
-            commandResults: [
-              ...commandResults,
-              { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
-            ],
-            failureReason: "env_failure",
-          };
-        }
-
-        commandResults.push({
-          name: cmd.name,
-          command: cmd.command,
+      if (result.timedOut) {
+        return {
           outcome: "fail",
+          summary: `Command "${cmd.name}" timed out after ${cmd.timeoutMs}ms`,
           rawLogPath: logPath,
-        });
+          commandResults: [
+            ...commandResults,
+            { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
+          ],
+          failureReason: "timeout",
+        };
+      }
+
+      if (isEnvFailure(result.exitCode, result.stderr)) {
+        return {
+          outcome: "blocked",
+          summary: `Environment failure running "${cmd.name}": ${result.stderr || "command not found"}`,
+          rawLogPath: logPath,
+          commandResults: [
+            ...commandResults,
+            { name: cmd.name, command: cmd.command, outcome: "fail", rawLogPath: logPath },
+          ],
+          failureReason: "env_failure",
+        };
+      }
+
+      const passed = result.exitCode === 0;
+      commandResults.push({
+        name: cmd.name,
+        command: cmd.command,
+        outcome: passed ? "pass" : "fail",
+        rawLogPath: logPath,
+      });
+
+      if (!passed) {
         hasFailed = true;
       }
     }
@@ -166,14 +106,96 @@ export class VerificationRunner {
   }
 }
 
-function isSpawnError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || code === "EACCES";
-}
-
-function isEnvFailure(exitCode: number, stderr: string): boolean {
+function isEnvFailure(exitCode: number | null, stderr: string): boolean {
   if (exitCode === 127) return true;
   if (exitCode !== 0 && stderr.includes("not found")) return true;
+  if (exitCode === null && stderr.includes("ENOENT")) return true;
   return false;
+}
+
+interface ShellCommandResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+async function runShellCommand(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+): Promise<ShellCommandResult> {
+  return new Promise((resolve) => {
+    const child = spawn(command, {
+      cwd,
+      detached: process.platform !== "win32",
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let settled = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killShellCommand(child.pid);
+    }, timeoutMs);
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      finish(null, `${stderr}${error.message}`, timedOut);
+    });
+    child.on("close", (code) => {
+      finish(code, stderr, timedOut);
+    });
+
+    function finish(exitCode: number | null, stderrText: string, didTimeOut: boolean): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ exitCode, stdout, stderr: stderrText, timedOut: didTimeOut });
+    }
+  });
+}
+
+function killShellCommand(pid: number | undefined): void {
+  if (!pid) return;
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid, "SIGKILL");
+      return;
+    }
+    process.kill(-pid, "SIGKILL");
+  } catch (error: unknown) {
+    if (!isMissingProcess(error)) {
+      throw error;
+    }
+  }
+}
+
+function formatCommandLog(command: string, result: ShellCommandResult): string {
+  const exitCode = result.exitCode ?? "null";
+  return [
+    `command: ${command}`,
+    `exit_code: ${exitCode}`,
+    `timed_out: ${result.timedOut}`,
+    `---stdout---`,
+    result.stdout,
+    `---stderr---`,
+    result.stderr,
+  ].join("\n");
+}
+
+function isMissingProcess(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (error as NodeJS.ErrnoException).code === "ESRCH";
 }
