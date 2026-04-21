@@ -1,61 +1,90 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      create_github_release:
+        description: "Create a GitHub release after npm publish"
+        required: true
+        default: true
+        type: boolean
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+permissions:
+  contents: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      id-token: write
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+          cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - run: pnpm run build
+      - name: Verify package name
+        run: npm pkg get name
 
-      - run: pnpm run typecheck
+      - name: Read package metadata
+        id: package
+        run: |
+          echo "name=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")" >> "$GITHUB_OUTPUT"
 
-      - run: pnpm run test
+      - name: Ensure version is not already published
+        run: |
+          if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
+            echo "Version ${{ steps.package.outputs.version }} is already published for ${{ steps.package.outputs.name }}."
+            exit 1
+          fi
 
-      - run: pnpm run lint
+      - name: Run build
+        run: pnpm run build
 
-      - run: pnpm run format
+      - name: Run typecheck
+        run: pnpm run typecheck
 
-      - name: Verify npm publish access
+      - name: Run tests
+        run: pnpm run test
+
+      - name: Run lint
+        run: pnpm run lint
+
+      - name: Run format check
+        run: pnpm run format
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Create release tag
+        run: |
+          git tag "v${{ steps.package.outputs.version }}"
+
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm whoami
-          npm access list packages @tezra-io > /tmp/npm-scope-packages.txt
-          echo "npm publish access verified for @tezra-io"
+        run: npm publish --access public
 
-      - name: Create release PR or publish
-        uses: changesets/action@v1
-        with:
-          version: pnpm run version-packages
-          publish: pnpm changeset publish
-          title: "chore: version packages"
-          commit: "chore: version packages"
+      - name: Push tag
+        run: git push origin "v${{ steps.package.outputs.version }}"
+
+      - name: Create GitHub release
+        if: ${{ inputs.create_github_release }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: gh release create "v${{ steps.package.outputs.version }}" --generate-notes
