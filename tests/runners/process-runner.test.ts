@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -92,7 +92,47 @@ describe("runProcess", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("piped input");
   });
+
+  it("finds user npm-global binaries when the daemon PATH is sparse", async () => {
+    const previousHome = process.env.HOME;
+    const previousPath = process.env.PATH;
+    const userBin = join(tmpDir, ".npm-global", "bin");
+    const fakeTool = join(userBin, "fake-agent");
+
+    await mkdir(userBin, { recursive: true });
+    await writeFile(fakeTool, "#!/bin/sh\necho user-bin-found\n", "utf8");
+    await chmod(fakeTool, 0o755);
+
+    try {
+      process.env.HOME = tmpDir;
+      process.env.PATH = "/usr/bin:/bin";
+
+      const result = await runProcess({
+        command: "fake-agent",
+        args: [],
+        cwd: tmpDir,
+        timeoutMs: 5000,
+        artifactDir: join(tmpDir, "logs"),
+        label: "user-bin-test",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe("user-bin-found");
+    } finally {
+      restoreEnv("HOME", previousHome);
+      restoreEnv("PATH", previousPath);
+    }
+  });
 });
+
+function restoreEnv(name: "HOME" | "PATH", value: string | undefined): void {
+  if (value === undefined) {
+    if (name === "HOME") delete process.env.HOME;
+    if (name === "PATH") delete process.env.PATH;
+    return;
+  }
+  process.env[name] = value;
+}
 
 describe("isRunnerAuthError", () => {
   it.each([

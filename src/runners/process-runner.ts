@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { execa } from "execa";
 
+import { childProcessEnv } from "./path-env.js";
+
 export interface ProcessRunnerOptions {
   command: string;
   args: string[];
@@ -32,6 +34,7 @@ export async function runProcess(options: ProcessRunnerOptions): Promise<Process
   try {
     const result = await execa(options.command, options.args, {
       cwd: options.cwd,
+      env: childProcessEnv(),
       timeout: options.timeoutMs,
       input: options.stdin,
       reject: false,
