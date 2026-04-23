@@ -3,6 +3,6 @@ import { VERSION } from "../src/index.js";
 
 describe("loomforge", () => {
   it("exports a version", () => {
-    expect(VERSION).toBe("0.1.6");
+    expect(VERSION).toBe("0.1.7");
   });
 });

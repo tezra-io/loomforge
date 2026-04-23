@@ -1,5 +1,15 @@
 # @tezra-io/loomforge
 
+## 0.1.7
+
+### Patch Changes
+
+- Fix postinstall so the daemon points at the just-installed global binary.
+
+  `findBin` now prefers `$npm_config_prefix/bin/<name>` before walking PATH. npm prepends local `node_modules/.bin` directories to PATH during the postinstall lifecycle, which can shadow the global install and make `findBin` return a stale binary from an unrelated project — leaving the launch agent running an old version after `npm install -g` succeeds.
+
+  `daemonPath()` also strips `node_modules/.bin` entries so those transient npm lifecycle artifacts don't get baked into the plist / systemd unit.
+
 ## 0.1.6
 
 ### Patch Changes

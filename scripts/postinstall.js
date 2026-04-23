@@ -217,7 +217,17 @@ WantedBy=default.target
   }
 }
 
-function findBin(name) {
+export function findBin(name) {
+  // Prefer the binary npm just installed into its global prefix. npm
+  // prepends local `node_modules/.bin` directories to PATH during the
+  // postinstall lifecycle, which can shadow the global install and make
+  // findBin return a stale binary from an unrelated project.
+  const npmPrefix = process.env.npm_config_prefix || process.env.NPM_CONFIG_PREFIX;
+  if (npmPrefix) {
+    const candidate = join(npmPrefix, "bin", name);
+    if (isExecutable(candidate)) return candidate;
+  }
+
   for (const dir of daemonPath().split(":")) {
     const candidate = join(dir, name);
     if (isExecutable(candidate)) return candidate;
@@ -254,6 +264,11 @@ export function daemonPath() {
   for (const dir of entries) {
     if (!dir || seen.has(dir)) continue;
     if (/[:\0\n\r]/.test(dir)) continue;
+    // npm prepends `<cwd>/node_modules/.bin` (and parent `.bin` dirs) to
+    // PATH during lifecycle scripts. Those are transient artifacts of the
+    // install, not stable daemon PATH entries — strip them so they don't
+    // end up baked into the plist / systemd unit.
+    if (/(^|\/)node_modules\/\.bin\/?$/.test(dir)) continue;
     seen.add(dir);
     pathEntries.push(dir);
   }
