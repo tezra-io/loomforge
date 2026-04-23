@@ -9,7 +9,7 @@ import type {
   PushResult,
   WorkflowStepContext,
 } from "../workflow/types.js";
-import { runProcess } from "./process-runner.js";
+import { runProcess, isRunnerAuthError } from "./process-runner.js";
 import { buildPrompt, pushPrompt } from "./prompts/builder.js";
 
 export type AgentTool = "claude" | "codex";
@@ -150,6 +150,14 @@ export class BuilderRunnerImpl implements BuilderRunner {
     }
 
     if (result.exitCode !== 0) {
+      if (isRunnerAuthError(result.stderr)) {
+        return {
+          outcome: "blocked",
+          summary: `Push authentication failed — re-authenticate and retry: ${truncate(result.stderr, 500)}`,
+          rawLogPath: result.stderrLogPath,
+          failureReason: "runner_auth_missing",
+        };
+      }
       return {
         outcome: "failed",
         summary: `Push failed: ${truncate(result.stderr, 500)}`,
@@ -199,6 +207,16 @@ export class BuilderRunnerImpl implements BuilderRunner {
   }
 
   private exitFailure(exitCode: number | null, stderr: string, logPath: string): BuilderResult {
+    if (isRunnerAuthError(stderr)) {
+      return {
+        outcome: "blocked",
+        summary: `Builder authentication failed — re-authenticate and retry: ${truncate(stderr, 500)}`,
+        changedFiles: [],
+        commitSha: null,
+        rawLogPath: logPath,
+        failureReason: "runner_auth_missing",
+      };
+    }
     return {
       outcome: "failed",
       summary: `Builder exited with code ${exitCode}: ${truncate(stderr, 500)}`,

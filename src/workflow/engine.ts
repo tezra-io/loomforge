@@ -363,7 +363,8 @@ export class WorkflowEngine {
       return "pass";
     }
     if (review.outcome === "blocked") {
-      await this.finishBlocked(run, project, issue, "review_loop_exhausted", {
+      const reason = review.failureReason ?? "review_loop_exhausted";
+      await this.finishBlocked(run, project, issue, reason, {
         summary: review.summary,
       });
       return "terminal";

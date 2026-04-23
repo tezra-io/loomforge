@@ -132,6 +132,18 @@ describe("BuilderRunnerImpl", () => {
     expect(result.commitSha).toBeNull();
   });
 
+  it("returns blocked with runner_auth_missing when codex exits with auth error", async () => {
+    await writeFakeBinary("codex", "echo 'Unauthorized: token expired' >&2; exit 1");
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.failureReason).toBe("runner_auth_missing");
+    expect(result.summary).toContain("authentication failed");
+    expect(result.commitSha).toBeNull();
+  });
+
   it("returns failed with timeout when codex exceeds time limit", async () => {
     await writeFakeBinary("codex", "exec sleep 60");
 
@@ -223,5 +235,23 @@ describe("BuilderRunnerImpl push", () => {
 
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("push_failed");
+  });
+
+  it("returns blocked with runner_auth_missing when push exits with auth error", async () => {
+    await writeFakeBinary("codex", "echo 'Authentication failed: not logged in' >&2; exit 1");
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const pushCtx: PushContext = {
+      run: createContext().run,
+      project: createContext().project,
+      issue: createContext().issue,
+      workspace: createContext().workspace,
+      attempt: createContext().attempt,
+    };
+    const result = await runner.push(pushCtx);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.failureReason).toBe("runner_auth_missing");
+    expect(result.summary).toContain("authentication failed");
   });
 });

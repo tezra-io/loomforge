@@ -158,13 +158,25 @@ describe("ReviewerRunnerImpl", () => {
   });
 
   it("returns blocked when reviewer exits non-zero", async () => {
-    await writeFakeBinary("claude", "echo 'auth error' >&2; exit 1");
+    await writeFakeBinary("claude", "echo 'some error' >&2; exit 1");
 
     const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     const result = await runner.review(createContext());
 
     expect(result.outcome).toBe("blocked");
     expect(result.summary).toContain("exit");
+    expect(result.failureReason).toBeUndefined();
+  });
+
+  it("returns blocked with runner_auth_missing when reviewer exits with auth error", async () => {
+    await writeFakeBinary("claude", "echo 'Unauthorized: token expired' >&2; exit 1");
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.failureReason).toBe("runner_auth_missing");
+    expect(result.summary).toContain("authentication failed");
   });
 
   it("returns blocked on timeout", async () => {
