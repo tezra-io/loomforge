@@ -97,6 +97,7 @@ export interface ReviewResult {
   findings: ReviewFinding[];
   summary: string;
   rawLogPath: string;
+  failureReason?: BlockedReason;
 }
 
 export interface RevisionInput {

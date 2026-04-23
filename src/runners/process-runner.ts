@@ -74,3 +74,24 @@ export async function runProcess(options: ProcessRunnerOptions): Promise<Process
     };
   }
 }
+
+export function isRunnerAuthError(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("authentication failed") ||
+    lower.includes("authentication required") ||
+    lower.includes("authentication error") ||
+    lower.includes("not authenticated") ||
+    lower.includes("not logged in") ||
+    lower.includes("unauthorized") ||
+    lower.includes("token expired") ||
+    lower.includes("invalid api key") ||
+    lower.includes("invalid_api_key") ||
+    lower.includes("api key not found") ||
+    lower.includes("permission denied (publickey)") ||
+    lower.includes("bad credentials") ||
+    lower.includes("403 forbidden") ||
+    lower.includes("terminal prompts disabled") ||
+    /\b401\b/.test(lower)
+  );
+}

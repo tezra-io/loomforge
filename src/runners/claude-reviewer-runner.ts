@@ -9,7 +9,7 @@ import type {
   WorkflowStepContext,
 } from "../workflow/types.js";
 import { agentCommand, type AgentTool } from "./codex-builder-runner.js";
-import { runProcess } from "./process-runner.js";
+import { runProcess, isRunnerAuthError } from "./process-runner.js";
 import { reviewPrompt } from "./prompts/reviewer.js";
 
 export interface ReviewerRunnerOptions {
@@ -55,6 +55,15 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
     }
 
     if (result.exitCode !== 0) {
+      if (isRunnerAuthError(result.stderr)) {
+        return {
+          outcome: "blocked",
+          findings: [],
+          summary: `Reviewer authentication failed — re-authenticate and retry: ${truncate(result.stderr, 500)}`,
+          rawLogPath: result.stderrLogPath,
+          failureReason: "runner_auth_missing",
+        };
+      }
       return {
         outcome: "blocked",
         findings: [],

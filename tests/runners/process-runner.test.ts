@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { runProcess } from "../../src/runners/process-runner.js";
+import { runProcess, isRunnerAuthError } from "../../src/runners/process-runner.js";
 
 let tmpDir: string;
 
@@ -91,5 +91,40 @@ describe("runProcess", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("piped input");
+  });
+});
+
+describe("isRunnerAuthError", () => {
+  it.each([
+    "Unauthorized: token expired",
+    "Error: authentication required",
+    "Authentication failed for 'https://github.com'",
+    "Authentication error: invalid credentials",
+    "Not authenticated — run `codex login`",
+    "not logged in",
+    "Token expired, please re-authenticate",
+    "invalid api key",
+    "invalid_api_key provided",
+    "API key not found",
+    "HTTP 401: Bad credentials",
+    "Permission denied (publickey).",
+    "remote: Bad credentials",
+    "The requested URL returned error: 403 Forbidden",
+    "could not read Username for 'https://github.com': terminal prompts disabled",
+    "error 401 fetching resource",
+  ])("detects auth error: %s", (stderr) => {
+    expect(isRunnerAuthError(stderr)).toBe(true);
+  });
+
+  it.each([
+    "syntax error on line 42",
+    "ENOENT: no such file or directory",
+    "permission denied",
+    "segmentation fault",
+    "",
+    "Working on authentication tests",
+    "port 4013 already in use",
+  ])("ignores non-auth error: %s", (stderr) => {
+    expect(isRunnerAuthError(stderr)).toBe(false);
   });
 });
