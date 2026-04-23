@@ -1,6 +1,9 @@
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { daemonPath, systemdQuote, xmlEscape } from "../../scripts/postinstall.js";
+import { daemonPath, findBin, systemdQuote, xmlEscape } from "../../scripts/postinstall.js";
 
 describe("xmlEscape", () => {
   it("escapes the five XML special characters", () => {
@@ -175,4 +178,60 @@ describe("daemonPath", () => {
       expect(entry.endsWith("/node_modules/.bin")).toBe(false);
     }
   });
+});
+
+describe("findBin", () => {
+  const saved: Record<string, string | undefined> = {};
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "loom-postinstall-"));
+    for (const key of ["PATH", "npm_config_prefix", "NPM_CONFIG_PREFIX"] as const) {
+      saved[key] = process.env[key];
+    }
+  });
+
+  afterEach(async () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = value;
+    }
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("prefers npm_config_prefix/bin over earlier PATH entries", async () => {
+    const prefix = join(tmpDir, "prefix");
+    const prefixBin = join(prefix, "bin");
+    const staleBin = join(tmpDir, "project", "node_modules", ".bin");
+    const expected = join(prefixBin, "loomforge");
+
+    await writeExecutable(expected);
+    await writeExecutable(join(staleBin, "loomforge"));
+
+    process.env.npm_config_prefix = prefix;
+    process.env.PATH = staleBin;
+
+    expect(findBin("loomforge")).toBe(expected);
+  });
+
+  it("does not resolve binaries from node_modules/.bin lifecycle paths", async () => {
+    const staleBin = join(tmpDir, "node_modules", ".bin");
+    const safeBin = join(tmpDir, "safe-bin");
+    const expected = join(safeBin, "loomforge");
+
+    await writeExecutable(join(staleBin, "loomforge"));
+    await writeExecutable(expected);
+
+    Reflect.deleteProperty(process.env, "npm_config_prefix");
+    Reflect.deleteProperty(process.env, "NPM_CONFIG_PREFIX");
+    process.env.PATH = [staleBin, safeBin].join(":");
+
+    expect(findBin("loomforge")).toBe(expected);
+  });
+
+  async function writeExecutable(filePath: string): Promise<void> {
+    await mkdir(dirname(filePath), { recursive: true });
+    await writeFile(filePath, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(filePath, 0o755);
+  }
 });

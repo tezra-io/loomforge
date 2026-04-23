@@ -217,7 +217,7 @@ WantedBy=default.target
   }
 }
 
-function findBin(name) {
+export function findBin(name) {
   // Prefer the binary npm just installed into its global prefix. npm
   // prepends local `node_modules/.bin` directories to PATH during the
   // postinstall lifecycle, which can shadow the global install and make
