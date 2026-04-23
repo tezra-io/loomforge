@@ -157,4 +157,22 @@ describe("daemonPath", () => {
     expect(entries).toContain("/custom/pnpm-home");
     expect(entries).toContain("/custom/bun/bin");
   });
+
+  it("filters out node_modules/.bin entries (npm postinstall artifacts)", () => {
+    // npm prepends these during the postinstall lifecycle; they should not
+    // be baked into the daemon PATH.
+    setEnv(
+      [
+        "/opt/pkg/node_modules/.bin",
+        "/home/alice/node_modules/.bin",
+        "/node_modules/.bin",
+        "/safe/bin",
+      ].join(":"),
+    );
+    const entries = daemonPath().split(":");
+    expect(entries).toContain("/safe/bin");
+    for (const entry of entries) {
+      expect(entry.endsWith("/node_modules/.bin")).toBe(false);
+    }
+  });
 });
