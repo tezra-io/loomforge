@@ -7,6 +7,7 @@ import type {
   VerificationResult,
   WorkflowStepContext,
 } from "../workflow/types.js";
+import { childProcessEnv } from "./path-env.js";
 
 export interface VerificationRunnerOptions {
   artifactDir: string;
@@ -129,6 +130,7 @@ async function runShellCommand(
     const child = spawn(command, {
       cwd,
       detached: process.platform !== "win32",
+      env: childProcessEnv(),
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
