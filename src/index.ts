@@ -1,5 +1,5 @@
 // Loom — slim local workflow engine for agentic software delivery
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.6";
 
 export * from "./api/index.js";
 export * from "./app/index.js";
