@@ -8,6 +8,9 @@ on:
         required: true
         default: true
         type: boolean
+  push:
+    branches: [main]
+    paths: ["package.json"]
 
 permissions:
   contents: write
@@ -37,54 +40,72 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify package name
-        run: npm pkg get name
-
       - name: Read package metadata
         id: package
         run: |
-          echo "name=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")" >> "$GITHUB_OUTPUT"
-          echo "version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")" >> "$GITHUB_OUTPUT"
+          name=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")
+          version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure version is not already published
+      - name: Skip if version already published
+        id: already_published
+        env:
+          PKG_NAME: ${{ steps.package.outputs.name }}
+          PKG_VERSION: ${{ steps.package.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if npm view "${{ steps.package.outputs.name }}@${{ steps.package.outputs.version }}" version >/dev/null 2>&1; then
-            echo "Version ${{ steps.package.outputs.version }} is already published for ${{ steps.package.outputs.name }}."
-            exit 1
+          if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "Version $PKG_VERSION is already published for $PKG_NAME."
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              exit 1
+            fi
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run build
+        if: steps.already_published.outputs.skip != 'true'
         run: pnpm run build
 
       - name: Run typecheck
+        if: steps.already_published.outputs.skip != 'true'
         run: pnpm run typecheck
 
       - name: Run tests
+        if: steps.already_published.outputs.skip != 'true'
         run: pnpm run test
 
       - name: Run lint
+        if: steps.already_published.outputs.skip != 'true'
         run: pnpm run lint
 
       - name: Run format check
+        if: steps.already_published.outputs.skip != 'true'
         run: pnpm run format
 
-      - name: Pack tarball
-        run: npm pack
-
       - name: Create release tag
-        run: |
-          git tag "v${{ steps.package.outputs.version }}"
+        if: steps.already_published.outputs.skip != 'true'
+        env:
+          TAG: v${{ steps.package.outputs.version }}
+        run: git tag "$TAG"
 
       - name: Publish to npm
+        if: steps.already_published.outputs.skip != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public
 
       - name: Push tag
-        run: git push origin "v${{ steps.package.outputs.version }}"
+        if: steps.already_published.outputs.skip != 'true'
+        env:
+          TAG: v${{ steps.package.outputs.version }}
+        run: git push origin "$TAG"
 
       - name: Create GitHub release
-        if: ${{ inputs.create_github_release }}
+        if: ${{ steps.already_published.outputs.skip != 'true' && (github.event_name == 'push' || inputs.create_github_release) }}
         env:
+          TAG: v${{ steps.package.outputs.version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "v${{ steps.package.outputs.version }}" --generate-notes
+        run: gh release create "$TAG" --generate-notes
