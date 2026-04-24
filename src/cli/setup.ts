@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 const green = "\x1b[32m";
@@ -31,6 +31,8 @@ export interface RunSetupOptions {
   setExitCode?: (code: number) => void;
   fileExists?: (path: string) => boolean;
   readTextFile?: (path: string, encoding: BufferEncoding) => string;
+  appendTextFile?: (path: string, content: string) => void;
+  mkdir?: (path: string) => void;
   execFile?: SetupExecFile;
   env?: NodeJS.ProcessEnv;
   homeDir?: () => string;
@@ -126,6 +128,8 @@ export async function runSetup(options: RunSetupOptions = {}): Promise<void> {
   const setExitCode = options.setExitCode ?? defaultSetExitCode;
   const fileExists = options.fileExists ?? existsSync;
   const readTextFile = options.readTextFile ?? readFileSync;
+  const appendTextFile = options.appendTextFile ?? defaultAppendTextFile;
+  const mkdir = options.mkdir ?? defaultMkdir;
   const execFile = options.execFile ?? defaultExecFile;
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir;
@@ -149,6 +153,18 @@ export async function runSetup(options: RunSetupOptions = {}): Promise<void> {
   if (!skillInstalled) {
     setExitCode(1);
   }
+
+  await runDesignSetup({
+    appendTextFile,
+    configPath: paths.configPath,
+    fileExists,
+    homeDir: homeDir(),
+    isInteractive,
+    mkdir,
+    prompt: options.prompt,
+    readTextFile,
+    write,
+  });
 
   writeLine(write, "");
   writeLine(write, `  ${dim}Optional: register MCP server for agent integration${reset}`);
@@ -317,6 +333,101 @@ async function promptForAgents(options: {
   };
 }
 
+async function runDesignSetup(options: {
+  appendTextFile: (path: string, content: string) => void;
+  configPath: string;
+  fileExists: (path: string) => boolean;
+  homeDir: string;
+  isInteractive: boolean;
+  mkdir: (path: string) => void;
+  prompt?: (question: string) => Promise<string>;
+  readTextFile: (path: string, encoding: BufferEncoding) => string;
+  write: (text: string) => void;
+}): Promise<void> {
+  if (!options.fileExists(options.configPath)) {
+    writeLine(
+      options.write,
+      `  ${yellow}○${reset} Design flow setup skipped — config missing at ${bold}${options.configPath}${reset}`,
+    );
+    return;
+  }
+
+  const content = options.readTextFile(options.configPath, "utf8");
+  if (/^design\s*:/m.test(content)) {
+    writeLine(options.write, `  ${green}✓${reset} Design flow already configured`);
+    return;
+  }
+
+  if (!options.isInteractive) {
+    writeLine(
+      options.write,
+      `  ${yellow}○${reset} Design flow setup skipped — interactive terminal required`,
+    );
+    return;
+  }
+
+  const prompt = options.prompt ?? createTerminalPrompt();
+  const defaultRepoRoot = resolve(join(options.homeDir, "projects"));
+  const repoRootAnswer = (
+    await prompt(`  Design repo root ${dim}[${defaultRepoRoot}]${reset}: `)
+  ).trim();
+  const repoRoot = repoRootAnswer ? resolve(repoRootAnswer) : defaultRepoRoot;
+
+  const teamKeyAnswer = (await prompt(`  Linear team key ${dim}[TEZ]${reset}: `)).trim();
+  const linearTeamKey = teamKeyAnswer || "TEZ";
+
+  const orgAnswer = (
+    await prompt(`  GitHub org for new repos ${dim}[blank = personal]${reset}: `)
+  ).trim();
+  const githubOrg = orgAnswer.length > 0 ? orgAnswer : null;
+
+  try {
+    options.mkdir(repoRoot);
+  } catch (error) {
+    writeLine(
+      options.write,
+      `  ${yellow}○${reset} Could not create ${bold}${repoRoot}${reset} — ${getErrorMessage(error)}`,
+    );
+    return;
+  }
+
+  const block = buildDesignBlock(content, repoRoot, linearTeamKey, githubOrg);
+  try {
+    options.appendTextFile(options.configPath, block);
+  } catch (error) {
+    writeLine(
+      options.write,
+      `  ${yellow}○${reset} Could not write design block — ${getErrorMessage(error)}`,
+    );
+    return;
+  }
+
+  const orgDetail = githubOrg ? `, githubOrg=${githubOrg}` : "";
+  writeLine(
+    options.write,
+    `  ${green}✓${reset} Design flow configured ${dim}(repoRoot=${repoRoot}, linearTeamKey=${linearTeamKey}${orgDetail})${reset}`,
+  );
+}
+
+function buildDesignBlock(
+  existingContent: string,
+  repoRoot: string,
+  linearTeamKey: string,
+  githubOrg: string | null,
+): string {
+  const prefix = existingContent.endsWith("\n") ? "" : "\n";
+  const orgLine = githubOrg ? `  githubOrg: ${githubOrg}\n` : "";
+  return (
+    `${prefix}\n` +
+    `design:\n` +
+    `  repoRoot: ${repoRoot}\n` +
+    `  defaultBranch: main\n` +
+    `  devBranch: dev\n` +
+    `  linearTeamKey: ${linearTeamKey}\n` +
+    orgLine
+  );
+}
+
 function createTerminalPrompt(): (question: string) => Promise<string> {
   return async (question: string) => {
     const rl = createInterface({
@@ -481,6 +592,14 @@ function defaultExecFile(
 
 function defaultSetExitCode(code: number): void {
   process.exitCode = code;
+}
+
+function defaultAppendTextFile(path: string, content: string): void {
+  appendFileSync(path, content, "utf8");
+}
+
+function defaultMkdir(path: string): void {
+  mkdirSync(path, { recursive: true });
 }
 
 function writeLine(write: (text: string) => void, text: string): void {

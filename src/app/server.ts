@@ -59,15 +59,21 @@ export async function startLoomServer(options: StartServerOptions): Promise<Runn
     globalConfig,
     dbPath: options.dbPath,
     logger,
+    loomConfigPath: options.configPath,
   });
   const server = createApiServer({
     engine: runtime.engine,
     scheduler: runtime.scheduler,
     store: runtime.store,
     artifactStore: runtime.artifactStore,
+    designEngine: runtime.designEngine,
+    designScheduler: runtime.designScheduler,
     logger,
   });
   const url = await server.listen({ host: options.host, port: options.port });
+
+  runtime.scheduler.schedule();
+  runtime.designScheduler.schedule();
 
   return {
     server,

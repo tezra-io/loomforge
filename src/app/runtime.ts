@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import pino, { type Logger } from "pino";
@@ -5,18 +6,30 @@ import pino, { type Logger } from "pino";
 import { ArtifactStore } from "../artifacts/index.js";
 import type { GlobalConfig, ProjectConfigRegistry } from "../config/index.js";
 import { SqliteRunStore } from "../db/index.js";
+import { DesignEngine, SqliteDesignRunStore, type DesignEngineOptions } from "../design/index.js";
 import { LinearWorkflowClientImpl, createMissingKeyClient } from "../linear/index.js";
-import { BuilderRunnerImpl, ReviewerRunnerImpl } from "../runners/index.js";
+import {
+  BuilderRunnerImpl,
+  DesignBuilderRunner,
+  DesignReviewerRunner,
+  ReviewerRunnerImpl,
+} from "../runners/index.js";
 import { WorkflowEngine } from "../workflow/index.js";
 import { GitWorkspaceManager } from "../worktrees/index.js";
 import { GhPullRequestCreator } from "../worktrees/pull-request-creator.js";
-import { createDrainScheduler, type DrainScheduler } from "./drain-scheduler.js";
+import {
+  createDrainScheduler,
+  createGenericDrainScheduler,
+  type DrainScheduler,
+} from "./drain-scheduler.js";
 
 const linearApiKeyPlaceholder = "lin_api_YOUR_KEY_HERE";
 
 export interface LoomRuntime {
   engine: WorkflowEngine;
+  designEngine: DesignEngine;
   scheduler: DrainScheduler;
+  designScheduler: DrainScheduler;
   store: SqliteRunStore;
   artifactStore: ArtifactStore;
   logger: Logger;
@@ -28,6 +41,7 @@ export interface CreateLoomRuntimeOptions {
   globalConfig?: GlobalConfig;
   dbPath?: string;
   logger?: Logger;
+  loomConfigPath?: string;
 }
 
 export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntime {
@@ -69,9 +83,33 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   });
   const scheduler = createDrainScheduler(engine, logger);
 
+  const designStore = new SqliteDesignRunStore(store.rawDb());
+  const designArtifactDir = join(options.registry.runtime.dataRoot, "design-artifacts");
+  const designEngineOptions: DesignEngineOptions = {
+    store: designStore,
+    linear,
+    builder: new DesignBuilderRunner(),
+    reviewer: new DesignReviewerRunner(),
+    registry: options.registry,
+    designConfig: options.globalConfig?.design ?? null,
+    loomConfigPath: options.loomConfigPath ?? join(homedir(), ".loomforge", "loom.yaml"),
+    artifactDir: designArtifactDir,
+    builderTool: "codex",
+    reviewerTool: "claude",
+    logger: logger.child({ component: "design-engine" }),
+  };
+  const designEngine = new DesignEngine(designEngineOptions);
+  const designScheduler = createGenericDrainScheduler(
+    designEngine,
+    logger.child({ component: "design-scheduler" }),
+    "design",
+  );
+
   return {
     engine,
+    designEngine,
     scheduler,
+    designScheduler,
     store,
     artifactStore: artifacts,
     logger,

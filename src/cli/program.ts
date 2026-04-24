@@ -154,6 +154,118 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
       );
     });
 
+  const designCommand = program
+    .command("design")
+    .description("Design-flow commands (scaffold → draft → review → publish)");
+
+  designCommand
+    .command("new")
+    .description("Scaffold a new project, draft & review a design doc, publish to Linear")
+    .argument("<slug>")
+    .option("--requirement-path <path>", "absolute path to a requirement markdown file")
+    .option("--requirement-text <text>", "requirement content as a string")
+    .option("--repo-root <path>", "override the default design.repoRoot from config")
+    .option("--redraft", "force a fresh draft even if a prior draft exists", false)
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (slug: string, commandOptions: DesignNewCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson({ baseUrl: commandOptions.url }, "POST", "/design/new", {
+          slug,
+          requirementPath: commandOptions.requirementPath,
+          requirementText: commandOptions.requirementText,
+          repoRoot: commandOptions.repoRoot,
+          redraft: Boolean(commandOptions.redraft),
+        }),
+      );
+    });
+
+  designCommand
+    .command("extend")
+    .description("Draft a feature-extension design doc for an existing project")
+    .argument("<slug>")
+    .requiredOption("--feature <slug>", "feature slug (lowercase, hyphen-separated)")
+    .option("--requirement-path <path>", "absolute path to a requirement markdown file")
+    .option("--requirement-text <text>", "requirement content as a string")
+    .option("--redraft", "force a fresh draft even if a prior draft exists", false)
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (slug: string, commandOptions: DesignExtendCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson({ baseUrl: commandOptions.url }, "POST", "/design/extend", {
+          slug,
+          feature: commandOptions.feature,
+          requirementPath: commandOptions.requirementPath,
+          requirementText: commandOptions.requirementText,
+          redraft: Boolean(commandOptions.redraft),
+        }),
+      );
+    });
+
+  designCommand
+    .command("get")
+    .description("Fetch a design run by ID")
+    .argument("<designRunId>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (designRunId: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "GET",
+          `/design/${encodeURIComponent(designRunId)}`,
+        ),
+      );
+    });
+
+  designCommand
+    .command("cancel")
+    .description("Cancel a design run")
+    .argument("<designRunId>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (designRunId: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "POST",
+          `/design/${encodeURIComponent(designRunId)}/cancel`,
+        ),
+      );
+    });
+
+  designCommand
+    .command("retry")
+    .description("Retry a failed or stuck design run")
+    .argument("<designRunId>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (designRunId: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "POST",
+          `/design/${encodeURIComponent(designRunId)}/retry`,
+        ),
+      );
+    });
+
+  designCommand
+    .command("status")
+    .description("Fetch the latest design-run status for a project slug")
+    .argument("<slug>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (slug: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "GET",
+          `/design/projects/${encodeURIComponent(slug)}/status`,
+        ),
+      );
+    });
+
   program
     .command("setup")
     .description("Validate config, install agent skill, and show next steps")
@@ -189,6 +301,20 @@ interface UrlCommandOptions {
 
 interface SubmitCommandOptions extends UrlCommandOptions {
   mode: string;
+}
+
+interface DesignNewCommandOptions extends UrlCommandOptions {
+  requirementPath?: string;
+  requirementText?: string;
+  repoRoot?: string;
+  redraft?: boolean;
+}
+
+interface DesignExtendCommandOptions extends UrlCommandOptions {
+  feature: string;
+  requirementPath?: string;
+  requirementText?: string;
+  redraft?: boolean;
 }
 
 function defaultConfigPath(): string {

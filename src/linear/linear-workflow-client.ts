@@ -10,7 +10,38 @@ export class LinearAuthError extends Error {
   }
 }
 
-export class LinearWorkflowClientImpl implements LinearWorkflowClient {
+export interface LinearProjectSummary {
+  id: string;
+  name: string;
+  url: string;
+  archivedAt: Date | null;
+}
+
+export interface LinearDocumentSummary {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface LinearDesignClient {
+  findProjectById(id: string): Promise<LinearProjectSummary | null>;
+  findProjectsByName(teamKey: string, name: string): Promise<LinearProjectSummary[]>;
+  createProject(
+    teamKey: string,
+    name: string,
+    content: string | null,
+  ): Promise<LinearProjectSummary>;
+  findDocumentOnProject(projectId: string, title: string): Promise<LinearDocumentSummary | null>;
+  findDocumentById(id: string): Promise<LinearDocumentSummary | null>;
+  createDocumentOnProject(
+    projectId: string,
+    title: string,
+    content: string,
+  ): Promise<LinearDocumentSummary>;
+  updateDocument(id: string, content: string): Promise<LinearDocumentSummary>;
+}
+
+export class LinearWorkflowClientImpl implements LinearWorkflowClient, LinearDesignClient {
   private readonly client: LinearClient;
 
   constructor(apiKey: string) {
@@ -141,6 +172,106 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient {
     });
   }
 
+  async findProjectById(id: string): Promise<LinearProjectSummary | null> {
+    return this.safeRequest(async () => {
+      const project = await this.client.project(id).catch(() => null);
+      if (!project) return null;
+      return toProjectSummary(project);
+    });
+  }
+
+  async findProjectsByName(teamKey: string, name: string): Promise<LinearProjectSummary[]> {
+    return this.safeRequest(async () => {
+      const team = await this.resolveTeam(teamKey);
+      const projects = await team.projects({ filter: { name: { eq: name } } });
+      return projects.nodes.map(toProjectSummary);
+    });
+  }
+
+  async createProject(
+    teamKey: string,
+    name: string,
+    content: string | null,
+  ): Promise<LinearProjectSummary> {
+    return this.safeRequest(async () => {
+      const team = await this.resolveTeam(teamKey);
+      const payload = await this.client.createProject({
+        name,
+        teamIds: [team.id],
+        ...(content ? { content } : {}),
+      });
+      const project = await payload.project;
+      if (!project) {
+        throw new Error(`Linear createProject returned no project for "${name}"`);
+      }
+      return toProjectSummary(project);
+    });
+  }
+
+  async findDocumentOnProject(
+    projectId: string,
+    title: string,
+  ): Promise<LinearDocumentSummary | null> {
+    return this.safeRequest(async () => {
+      const project = await this.client.project(projectId).catch(() => null);
+      if (!project) return null;
+
+      let connection = await project.documents();
+      while (true) {
+        for (const doc of connection.nodes) {
+          if (doc.title === title) {
+            return toDocumentSummary(doc);
+          }
+        }
+        if (!connection.pageInfo.hasNextPage) break;
+        connection = await connection.fetchNext();
+      }
+      return null;
+    });
+  }
+
+  async findDocumentById(id: string): Promise<LinearDocumentSummary | null> {
+    return this.safeRequest(async () => {
+      const doc = await this.client.document(id).catch(() => null);
+      return doc ? toDocumentSummary(doc) : null;
+    });
+  }
+
+  async createDocumentOnProject(
+    projectId: string,
+    title: string,
+    content: string,
+  ): Promise<LinearDocumentSummary> {
+    return this.safeRequest(async () => {
+      const payload = await this.client.createDocument({ title, content, projectId });
+      const doc = await payload.document;
+      if (!doc) {
+        throw new Error(`Linear createDocument returned no document for "${title}"`);
+      }
+      return toDocumentSummary(doc);
+    });
+  }
+
+  async updateDocument(id: string, content: string): Promise<LinearDocumentSummary> {
+    return this.safeRequest(async () => {
+      const payload = await this.client.updateDocument(id, { content });
+      const doc = await payload.document;
+      if (!doc) {
+        throw new Error(`Linear updateDocument returned no document for id ${id}`);
+      }
+      return toDocumentSummary(doc);
+    });
+  }
+
+  private async resolveTeam(teamKey: string) {
+    const teams = await this.client.teams({ filter: { key: { eq: teamKey } } });
+    const team = teams.nodes[0];
+    if (!team) {
+      throw new Error(`Linear team not found: ${teamKey}`);
+    }
+    return team;
+  }
+
   private async safeRequest<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn();
@@ -153,7 +284,7 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient {
   }
 }
 
-export function createMissingKeyClient(): LinearWorkflowClient {
+export function createMissingKeyClient(): LinearWorkflowClient & LinearDesignClient {
   const err = () => {
     throw new LinearAuthError(
       "Linear API key not configured — add it to ~/.loomforge/config.yaml or set LINEAR_API_KEY",
@@ -163,7 +294,40 @@ export function createMissingKeyClient(): LinearWorkflowClient {
     fetchIssue: err,
     listProjectIssues: err,
     updateIssueStatus: err,
+    findProjectById: err,
+    findProjectsByName: err,
+    createProject: err,
+    findDocumentOnProject: err,
+    findDocumentById: err,
+    createDocumentOnProject: err,
+    updateDocument: err,
   };
+}
+
+interface ProjectLike {
+  id: string;
+  name: string;
+  url: string;
+  archivedAt?: Date | null;
+}
+
+interface DocumentLike {
+  id: string;
+  title: string;
+  url: string;
+}
+
+function toProjectSummary(project: ProjectLike): LinearProjectSummary {
+  return {
+    id: project.id,
+    name: project.name,
+    url: project.url,
+    archivedAt: project.archivedAt ?? null,
+  };
+}
+
+function toDocumentSummary(doc: DocumentLike): LinearDocumentSummary {
+  return { id: doc.id, title: doc.title, url: doc.url };
 }
 
 function parseIssueIdentifier(id: string): { teamKey: string; issueNumber: number } {

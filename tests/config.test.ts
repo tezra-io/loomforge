@@ -256,7 +256,40 @@ linear:
 
     expect(config).toEqual({
       linear: { apiKey: "lin_api_xxxxx" },
+      design: null,
     });
+  });
+
+  it("parses a design section with defaults", () => {
+    const config = parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+design:
+  repoRoot: /repos
+  defaultBranch: main
+  linearTeamKey: TEZ
+`);
+
+    expect(config.design).toEqual({
+      repoRoot: "/repos",
+      defaultBranch: "main",
+      devBranch: "dev",
+      linearTeamKey: "TEZ",
+    });
+  });
+
+  it("rejects design config whose devBranch equals defaultBranch", () => {
+    expect(() =>
+      parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+design:
+  repoRoot: /repos
+  defaultBranch: main
+  devBranch: main
+  linearTeamKey: TEZ
+`),
+    ).toThrow(/devBranch must differ from design.defaultBranch/);
   });
 
   it("rejects global config without Linear API key", () => {

@@ -41,6 +41,10 @@ export class SqliteRunStore implements WorkflowRunStore {
     this.db.close();
   }
 
+  rawDb(): DatabaseSync {
+    return this.db;
+  }
+
   saveProject(project: ProjectConfig): void {
     this.db
       .prepare(
@@ -179,6 +183,15 @@ export class SqliteRunStore implements WorkflowRunStore {
       }
       if (migration.needsCheck && migration.checkColumn) {
         if (!this.columnExists(migration.checkColumn.table, migration.checkColumn.column)) {
+          this.db
+            .prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+            .run(migration.version, new Date().toISOString());
+          continue;
+        }
+      }
+      if (migration.skipIfColumnExists) {
+        const { table, column } = migration.skipIfColumnExists;
+        if (this.columnExists(table, column)) {
           this.db
             .prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
             .run(migration.version, new Date().toISOString());

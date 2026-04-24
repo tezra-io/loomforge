@@ -7,7 +7,19 @@ export interface DrainScheduler {
   drainNow(): Promise<void>;
 }
 
+interface Drainable {
+  drainNext(): Promise<unknown>;
+}
+
 export function createDrainScheduler(engine: WorkflowEngine, logger: Logger): DrainScheduler {
+  return createGenericDrainScheduler(engine, logger, "workflow");
+}
+
+export function createGenericDrainScheduler(
+  engine: Drainable,
+  logger: Logger,
+  label: string,
+): DrainScheduler {
   let draining = false;
   let rescheduleRequested = false;
 
@@ -26,7 +38,7 @@ export function createDrainScheduler(engine: WorkflowEngine, logger: Logger): Dr
         }
       } while (rescheduleRequested);
     } catch (error) {
-      logger.error({ error }, "workflow drain failed");
+      logger.error({ error, label }, `${label} drain failed`);
     } finally {
       draining = false;
     }

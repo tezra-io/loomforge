@@ -21,6 +21,8 @@ request. It runs an agentic build → review → PR pipeline — fully unattende
 - [Install from Source](#install-from-source)
 - [Configuration](#configuration)
 - [Usage](#usage)
+  - [Issue build flow](#issue-build-flow)
+  - [Design flow](#design-flow)
 - [MCP Server (optional)](#mcp-server-optional)
 - [Development](#development)
 - [Testing](#testing)
@@ -153,7 +155,35 @@ projects:
           command: pnpm run lint
 ```
 
-### 3. Start the daemon
+### 3. (Optional) Enable the design flow
+
+The design flow scaffolds a new project, drafts a design doc with the builder,
+reviews it, applies a revision if needed, and publishes to Linear.
+
+**Easiest: run `loomforge setup`.** After the agent-skill prompt it asks for a
+design `repoRoot` (default `~/projects` — created if missing), a
+`linearTeamKey` (default `TEZ`), and an optional GitHub org (blank = personal
+account), then appends the `design:` block to `~/.loomforge/config.yaml`.
+Branches are fixed at `main` / `dev`. Skipped if the block is already
+present.
+
+**Manual:** add the block yourself:
+
+```yaml
+design:
+  repoRoot: /path/to/workspaces    # parent dir where new project repos are scaffolded
+  defaultBranch: main              # branch to open the design-doc PR against
+  devBranch: dev                   # long-lived branch the design doc is pushed to (default: dev)
+  linearTeamKey: TEZ               # Linear team key that owns new design projects
+  githubOrg: tezra-io              # optional — create new repos under this org instead of your user
+```
+
+`devBranch` must differ from `defaultBranch`. `githubOrg`, when set, is used
+as the repo owner in `gh repo create <org>/<slug>`; omit it (or leave blank)
+to create repos under your authenticated GitHub user. Omit the whole block
+if you only use the issue-build flow.
+
+### 4. Start the daemon
 
 If the daemon was registered via postinstall, it starts on login automatically.
 To start manually:
@@ -167,6 +197,8 @@ loomforge start --config /other/path.yaml   # custom config
 
 ## Usage
 
+### Issue build flow
+
 ```sh
 loomforge status                        # daemon health check
 loomforge submit my-project             # enqueue all actionable issues
@@ -176,6 +208,30 @@ loomforge get <runId>                   # get run state and findings
 loomforge cancel <runId>                # cancel a queued run
 loomforge retry <runId>                 # retry a failed/blocked run
 ```
+
+### Design flow
+
+```sh
+# Scaffold a new project, draft & review a design doc, publish to Linear.
+loomforge design new my-project \
+  --requirement-path /abs/path/requirement.md
+
+# Or pass the requirement inline:
+loomforge design new my-project --requirement-text "Build a …"
+
+# Draft a feature-extension design doc for an existing project:
+loomforge design extend my-project --feature billing \
+  --requirement-path /abs/path/billing.md
+
+loomforge design get <designRunId>          # fetch a design run by id
+loomforge design cancel <designRunId>       # cancel an active design run
+loomforge design retry <designRunId>        # retry a failed/blocked design run
+loomforge design status my-project          # latest design run for a slug
+```
+
+Requirement files must be absolute paths, end in `.md` or `.txt`, live outside
+hidden directories, and stay under 256 KiB. Use `--redraft` on `new` / `extend`
+to force a fresh draft when re-running.
 
 ---
 
@@ -194,9 +250,14 @@ Or target specific agents:
 npx add-mcp loomforge -- loomforge mcp-serve -a claude-code -a codex
 ```
 
-MCP tools: `loom_health`, `loom_submit_run`, `loom_submit_project`,
-`loom_get_run`, `loom_get_queue`, `loom_get_project_status`, `loom_cancel_run`,
-`loom_retry_run`, `loom_cleanup_workspace`.
+MCP tools:
+
+- Issue build: `loom_health`, `loom_submit_run`, `loom_submit_project`,
+  `loom_get_run`, `loom_get_queue`, `loom_get_project_status`, `loom_cancel_run`,
+  `loom_retry_run`, `loom_cleanup_workspace`.
+- Design flow: `loom_design_new_project`, `loom_design_extend_project`,
+  `loom_get_design_run`, `loom_cancel_design_run`, `loom_retry_design_run`,
+  `loom_get_design_run_status_for_project`.
 
 ---
 
@@ -217,6 +278,8 @@ pnpm run dev start --config ./loom.yaml
 pnpm run dev status
 pnpm run dev submit my-project TEZ-1
 pnpm run dev queue
+pnpm run dev design new my-project --requirement-text "Build a …"
+pnpm run dev design status my-project
 ```
 
 ---
@@ -255,6 +318,34 @@ loomforge submit my-project              # all actionable issues
 loomforge queue
 loomforge get <runId>
 # When all issues complete, a PR from dev→main is created automatically
+```
+
+### Design flow smoke test
+
+Prerequisites: `design:` block configured (see
+[Configuration](#3-optional-enable-the-design-flow)), builder and reviewer
+CLIs authenticated, Linear API key configured, a requirement markdown file.
+
+```sh
+# Terminal 1: start daemon
+loomforge start --config ./loom.yaml --port 3777
+
+# Terminal 2: kick off a fresh design run
+loomforge design new my-project \
+  --requirement-path /abs/path/requirement.md
+# → returns { designRunId, state: "queued", ... }
+
+loomforge design status my-project       # poll overall project state
+loomforge design get <designRunId>       # inspect the specific run
+# On success the design doc is pushed to `design.devBranch` and published
+# to Linear as a project document with a review summary.
+```
+
+Extend an existing project with a new feature doc:
+
+```sh
+loomforge design extend my-project --feature billing \
+  --requirement-path /abs/path/billing.md
 ```
 
 ---

@@ -152,7 +152,10 @@ design:
   defaultBranch: main
   devBranch: dev                   # optional
   linearTeamKey: TEZ               # default team for new Linear projects
+  githubOrg: tezra-io              # optional — create new repos under this org instead of the authenticated GitHub user
 ```
+
+`githubOrg`, when set, is forwarded to `ensureGithubRemote` and used as the repo owner in `gh repo create <org>/<slug>`. `loomforge setup` prompts for this value (blank = personal account) and appends the block automatically if the `design:` section is missing.
 
 ## Naming convention
 One canonical form is used across all surfaces: **lowercase, hyphen-separated** (`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`). No spaces, no underscores, no camelCase, no uppercase. Concretely:
