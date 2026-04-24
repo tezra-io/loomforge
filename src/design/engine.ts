@@ -81,6 +81,7 @@ export interface DesignEngineOptions {
   newId?: () => string;
   now?: () => number;
   ghRemote?: GhRemoteProvider;
+  onProjectRegistered?: () => void | Promise<void>;
 }
 
 interface StepContext {
@@ -105,7 +106,7 @@ export class DesignEngine {
   private readonly newId: () => string;
   private readonly now: () => number;
   private readonly inFlight = new Set<string>();
-  private readonly pathPolicy: DesignPathPolicy;
+  private pathPolicy: DesignPathPolicy;
   private readonly ghRemote: GhRemoteProvider;
 
   constructor(options: DesignEngineOptions) {
@@ -114,13 +115,24 @@ export class DesignEngine {
     this.newId = options.newId ?? randomUUID;
     this.now = options.now ?? (() => Date.now());
     this.ghRemote = options.ghRemote ?? ensureGithubRemote;
+    this.pathPolicy = this.buildPathPolicy();
+    this.recoverPersistedRuns();
+  }
+
+  setRegistry(registry: ProjectConfigRegistry): void {
+    this.options.registry = registry;
+    this.pathPolicy = this.buildPathPolicy();
+  }
+
+  private buildPathPolicy(): DesignPathPolicy {
     const repoRoots = Array.from(
-      new Set(options.registry.projects.map((p) => p.repoRoot).filter((r): r is string => !!r)),
+      new Set(
+        this.options.registry.projects.map((p) => p.repoRoot).filter((r): r is string => !!r),
+      ),
     );
-    this.pathPolicy = buildDesignPathPolicy(options.designConfig?.repoRoot ?? null, {
+    return buildDesignPathPolicy(this.options.designConfig?.repoRoot ?? null, {
       repoRoots,
     });
-    this.recoverPersistedRuns();
   }
 
   private recoverPersistedRuns(): void {
@@ -320,7 +332,7 @@ export class DesignEngine {
         repoPath: initial.repoPath ?? "",
         defaultBranch: design.defaultBranch,
         devBranch: design.devBranch,
-        linearTeamKey: design.linearTeamKey,
+        linearTeamKey: registered?.linearTeamKey ?? design.linearTeamKey,
       };
       const requirementMarkdown = await loadRequirementMarkdown(initial.requirement);
       const ctx: StepContext = {
@@ -866,6 +878,19 @@ export class DesignEngine {
       );
       return { outcome: "failed", run: { ...run, updatedAt: this.now() } };
     }
+    if (this.options.onProjectRegistered) {
+      try {
+        await this.options.onProjectRegistered();
+      } catch (error) {
+        this.log.warn(
+          {
+            runId: run.id,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "onProjectRegistered callback failed",
+        );
+      }
+    }
     return {
       outcome: "success",
       run: { ...run, registeredAt: this.now(), updatedAt: this.now() },
@@ -1017,11 +1042,11 @@ export function documentTitle(run: { slug: string; feature: string | null }): st
   return run.feature ? `${run.slug}-${run.feature}` : run.slug;
 }
 
-function resumeStateFor(run: DesignRunRecord): DesignRunState {
+export function resumeStateFor(run: DesignRunRecord): DesignRunState {
   if (!run.repoPath) return run.kind === "new" ? "validating" : "drafting";
   if (!run.designDocSha) return run.kind === "new" ? "scaffolding" : "drafting";
   if (!run.reviewOutcome) return "reviewing";
-  if (run.reviewOutcome === "revise" && !run.linearProjectId) return "revising";
+  if (run.reviewOutcome === "revise" && !run.revisionApplied) return "revising";
   if (!run.linearProjectId || !run.linearDocumentId) return "publishing";
   if (run.kind === "new") return "registering";
   return "complete";

@@ -98,9 +98,10 @@ const globalConfigSchema = z
   .object({
     linear: z
       .object({
-        apiKey: nonEmptyStringSchema,
+        apiKey: nonEmptyStringSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
     design: designConfigSchema.optional(),
   })
   .strict();
@@ -176,8 +177,8 @@ export interface DesignConfig {
 }
 
 export interface GlobalConfig {
-  linear: {
-    apiKey: string;
+  linear?: {
+    apiKey?: string;
   };
   design: DesignConfig | null;
 }

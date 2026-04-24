@@ -145,11 +145,11 @@ Read these before making major architecture changes:
 - `docs/APPROACHES.md`
 - `docs/loom-v1-design.md`
 
-External reference material:
-- Paperclip reference repo: `/Users/sujshe/projects/paperclip`
-- Dev-build skill (primary workflow reference): `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
-- Paperclip MCP `makeTool` pattern: `/Users/sujshe/projects/paperclip/packages/mcp-server/src/tools.ts`
-- Rollback baseline for old dev-build workflow: `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/REVERT_BASELINE_2026-04-08.md`
+External reference material (local-only paths; adjust to your machine):
+- Paperclip reference repo: `~/projects/paperclip`
+- Dev-build skill (primary workflow reference): `~/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
+- Paperclip MCP `makeTool` pattern: `~/projects/paperclip/packages/mcp-server/src/tools.ts`
+- Rollback baseline for old dev-build workflow: `~/.openclaw/workspace/backups/paperclip-revert/REVERT_BASELINE_2026-04-08.md`
 
 Build Loomforge from scratch. Reference the dev-build skill for workflow shape, prompt patterns, and Linear queries. Reference Paperclip MCP for tool definition patterns. Do not extract or copy Paperclip code — it carries too much platform weight (Postgres, multi-tenant, plugins, auth, UI).
 

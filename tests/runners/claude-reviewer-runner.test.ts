@@ -204,6 +204,25 @@ describe("ReviewerRunnerImpl", () => {
     expect(result.outcome).toBe("pass");
   });
 
+  it("extracts JSON even when the reviewer emits prose with brace placeholders first", async () => {
+    const json = JSON.stringify({
+      outcome: "revise",
+      findings: [{ severity: "P0", title: "Missing null check", detail: "Guard input" }],
+      summary: "Needs fixes",
+    });
+    await writeFakeBinary(
+      "claude",
+      `printf '%s\\n%s\\n' 'Looking at the diff, I see issues with {variable} references.' '${json}'`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("revise");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings.at(0)?.title).toBe("Missing null check");
+  });
+
   it("filters out malformed findings", async () => {
     const output = JSON.stringify({
       outcome: "revise",

@@ -145,10 +145,11 @@ loom/
 - Loomforge should use launchd integration and start along with OpenClaw
 
 ## Reference material
-- Paperclip reference repo: `/Users/sujshe/projects/paperclip`
-- Dev-build skill (primary workflow reference): `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
-- Paperclip MCP `makeTool` pattern: `/Users/sujshe/projects/paperclip/packages/mcp-server/src/tools.ts`
-- Revert baseline for the current dev-build path: `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/REVERT_BASELINE_2026-04-08.md`
+Local-only paths; adjust to your machine:
+- Paperclip reference repo: `~/projects/paperclip`
+- Dev-build skill (primary workflow reference): `~/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
+- Paperclip MCP `makeTool` pattern: `~/projects/paperclip/packages/mcp-server/src/tools.ts`
+- Revert baseline for the current dev-build path: `~/.openclaw/workspace/backups/paperclip-revert/REVERT_BASELINE_2026-04-08.md`
 
 ## Draft objective
 Produce a first design doc that explains how Loomforge V1 works end-to-end, what core modules it needs, what state it persists, and how OpenClaw talks to it without bloating into Paperclip-lite.

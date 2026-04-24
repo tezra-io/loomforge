@@ -193,9 +193,9 @@ V1 should keep project config in checked-in files, not only the database. The da
 Suggested config shape:
 ```yaml
 slug: rustyclaw
-repoRoot: /Users/sujshe/projects/rustyclaw
+repoRoot: ~/projects/rustyclaw
 defaultBranch: master
-worktreeRoot: /Users/sujshe/.loom/worktrees/rustyclaw
+worktreeRoot: ~/.loom/worktrees/rustyclaw
 devBranch: dev                               # all issues commit here, rebased on defaultBranch before each run
 verify:
   - cargo test
@@ -757,12 +757,12 @@ Rules:
 ## Reference material and reuse guidance
 
 ### Paperclip reference repo
-Path: `/Users/sujshe/projects/paperclip`
+Path: `~/projects/paperclip`
 
 Paperclip is a full platform with multi-tenant orgs, Postgres, UI, plugins, and 7+ adapter types. Most of it is too heavy to extract for Loomforge. Build Loomforge from scratch, referencing two specific sources:
 
 ### Dev-build skill (primary reference)
-Path: `/Users/sujshe/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
+Path: `~/.openclaw/workspace/backups/paperclip-revert/dev-build-SKILL.backup.md`
 
 The proven workflow that Loomforge is hardening into a durable state machine. Reference for:
 - workflow shape: Context → Build → Verify → Review → Fix → Ship
@@ -775,7 +775,7 @@ The proven workflow that Loomforge is hardening into a durable state machine. Re
 - final review sweep for batches of 3+ issues
 
 ### Paperclip MCP server (pattern reference)
-Path: `/Users/sujshe/projects/paperclip/packages/mcp-server/src/tools.ts`
+Path: `~/projects/paperclip/packages/mcp-server/src/tools.ts`
 
 Reference for:
 - `makeTool` pattern: clean tool definition with zod schema + execute function

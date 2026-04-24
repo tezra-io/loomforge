@@ -154,6 +154,21 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
       );
     });
 
+  const configCommand = program
+    .command("config")
+    .description("Inspect and reload Loomforge configuration");
+
+  configCommand
+    .command("reload")
+    .description("Re-read ~/.loomforge/loom.yaml on the running daemon")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson({ baseUrl: commandOptions.url }, "POST", "/config/reload"),
+      );
+    });
+
   const designCommand = program
     .command("design")
     .description("Design-flow commands (scaffold → draft → review → publish)");

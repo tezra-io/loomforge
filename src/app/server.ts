@@ -68,6 +68,7 @@ export async function startLoomServer(options: StartServerOptions): Promise<Runn
     artifactStore: runtime.artifactStore,
     designEngine: runtime.designEngine,
     designScheduler: runtime.designScheduler,
+    reloadConfig: runtime.reloadConfig,
     logger,
   });
   const url = await server.listen({ host: options.host, port: options.port });

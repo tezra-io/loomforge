@@ -7,8 +7,9 @@
  ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 ```
 
-A local workflow engine that automates the path from Linear issue to pull
-request. It runs an agentic build → review → PR pipeline — fully unattended.
+A local workflow engine that takes you from idea to merged PR, unattended.
+Two pipelines: a **design flow** (requirements → scaffolded repo + Linear
+project + design doc) and a **build flow** (Linear issue → code → review → PR).
 
 ---
 
@@ -23,6 +24,7 @@ request. It runs an agentic build → review → PR pipeline — fully unattende
 - [Usage](#usage)
   - [Issue build flow](#issue-build-flow)
   - [Design flow](#design-flow)
+  - [Reloading project config](#reloading-project-config)
 - [MCP Server (optional)](#mcp-server-optional)
 - [Development](#development)
 - [Testing](#testing)
@@ -35,15 +37,23 @@ request. It runs an agentic build → review → PR pipeline — fully unattende
 
 ## What It Does
 
-You point Loomforge at a Linear project. It fetches actionable issues, spins up
-a builder agent (Codex or Claude) to write the code, runs a reviewer agent to
-check it, applies one round of fixes if needed, pushes to a `dev` branch, and
-opens a pull request. You review and merge — Loomforge handles everything
-before that.
+Loomforge runs two complementary pipelines, both unattended:
+
+**Design flow.** Write a one-page requirements doc and run
+`loomforge design new <slug>`. Loomforge scaffolds a Git repo (locally and on
+GitHub), drafts a structured design doc, has a reviewer agent critique it,
+revises once, then publishes the doc as a Linear project plus a design
+document. You review the design and break it into Linear issues — that human
+checkpoint is deliberate.
+
+**Build flow.** Point Loomforge at a Linear project. It fetches actionable
+issues, spins up a builder agent (Codex or Claude) to write the code, runs a
+reviewer agent to check it, applies one round of fixes if needed, pushes to a
+`dev` branch, and opens a pull request describing what shipped. You review and
+merge — Loomforge handles everything before that.
 
 **Designed for:** solo developers and small teams who want overnight or
-batch-mode code generation from well-specified Linear issues, without running
-a heavyweight platform.
+batch-mode design + build cycles, without running a heavyweight platform.
 
 ---
 
@@ -59,6 +69,13 @@ weeks. I looked at Paperclip, but it carries too much weight - multi-tenant,
 Postgres, plugin marketplace — for what is fundamentally a single-developer
 overnight build loop. Loomforge is the lighter, purpose-built replacement:
 same pipeline, fewer moving parts, easy to fix when something changes.
+
+The design half was the natural sibling. The same brainstorming with OpenClaw
+that produced the issues also needed a repo and a published design doc — work
+I was doing by hand at 11pm. Loomforge's design flow runs the same agents over
+a one-page requirements doc and produces the scaffolding, the Linear project,
+and the design doc. I still create the issues by hand — that review point
+stays — and then the build flow takes over.
 
 ---
 
@@ -232,6 +249,19 @@ loomforge design status my-project          # latest design run for a slug
 Requirement files must be absolute paths, end in `.md` or `.txt`, live outside
 hidden directories, and stay under 256 KiB. Use `--redraft` on `new` / `extend`
 to force a fresh draft when re-running.
+
+### Reloading project config
+
+The daemon parses `~/.loomforge/loom.yaml` once at startup. The design flow
+already triggers a reload after `register` so a freshly scaffolded project is
+immediately available to the build flow without restarting. If you hand-edit
+`loom.yaml`, ask the daemon to re-read it:
+
+```sh
+loomforge config reload
+```
+
+Returns the new project count and slug list. No effect on in-flight runs.
 
 ---
 

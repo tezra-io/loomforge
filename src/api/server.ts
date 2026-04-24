@@ -42,6 +42,7 @@ export interface CreateApiServerOptions {
   artifactStore?: ArtifactStore;
   designEngine?: DesignEngine;
   designScheduler?: DrainScheduler;
+  reloadConfig?: () => Promise<{ projects: number; slugs: string[] }>;
   logger: Logger;
 }
 
@@ -90,6 +91,19 @@ export function createApiServer(options: CreateApiServerOptions) {
   server.get("/queue", async () => ({
     data: options.engine.getQueue(),
   }));
+
+  server.post("/config/reload", async (_request, reply) => {
+    if (!options.reloadConfig) {
+      return reply.code(503).send({ error: "config_reload_unavailable" });
+    }
+    try {
+      const result = await options.reloadConfig();
+      return reply.code(200).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(500).send({ error: "config_reload_failed", details: message });
+    }
+  });
 
   server.post("/runs", async (request, reply) => {
     const parsed = submitRunSchema.safeParse(request.body);

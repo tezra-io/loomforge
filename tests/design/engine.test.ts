@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DesignConfig, ProjectConfig, ProjectConfigRegistry } from "../../src/config/index.js";
 import {
   DesignEngine,
+  resumeStateFor,
   type DesignEngineOptions,
   type GhRemoteProvider,
 } from "../../src/design/engine.js";
@@ -840,8 +841,171 @@ describe("DesignEngine", () => {
     expect(transitions).toContain("design run publishing → registering");
     expect(transitions).toContain("design run registering → complete");
   });
+
+  it("uses the registered project's linearTeamKey for extend runs, not the global default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "loom-design-extend-team-"));
+    const repoPath = await setupRepoDir(dir, "alpha");
+    const project = buildProject({
+      slug: "alpha",
+      repoRoot: repoPath,
+      linearTeamKey: "OTHER",
+      linearProjectName: "alpha",
+    });
+
+    const store = new InMemoryDesignRunStore();
+    const { client: linear } = createFakeLinear();
+    const findCalls: Array<{ teamKey: string; name: string }> = [];
+    linear.findProjectsByName = async (teamKey, name) => {
+      findCalls.push({ teamKey, name });
+      return [];
+    };
+
+    const engine = new DesignEngine({
+      store,
+      linear,
+      builder: createFakeBuilder(writeValidDesignDoc).runner,
+      reviewer: createFakeReviewer("pass").runner,
+      registry: buildRegistry([project]),
+      designConfig: {
+        repoRoot: dir,
+        defaultBranch: "main",
+        devBranch: "dev",
+        linearTeamKey: "ENG",
+      },
+      loomConfigPath: join(dir, "loom.yaml"),
+      artifactDir: join(dir, "artifacts"),
+      builderTool: "codex",
+      reviewerTool: "claude",
+      ghRemote: async () => ({ outcome: "skipped", reason: "gh_missing" }),
+    });
+
+    await engine.startExtend({
+      slug: "alpha",
+      feature: "turbo",
+      requirementText: "add turbo",
+    });
+    await engine.drainNext();
+
+    expect(findCalls.length).toBeGreaterThanOrEqual(1);
+    expect(findCalls[0]?.teamKey).toBe("OTHER");
+  });
+
+  it("setRegistry makes a freshly registered project available to startExtend", async () => {
+    harness = await buildHarness();
+
+    await expect(
+      harness.engine.startExtend({
+        slug: "kayak",
+        feature: "search",
+        requirementText: "add search",
+      }),
+    ).rejects.toThrow(/not registered in loom\.yaml/);
+
+    const project = buildProject({ slug: "kayak", repoRoot: join(harness.dir, "repos", "kayak") });
+    harness.engine.setRegistry(buildRegistry([project]));
+
+    const run = await harness.engine.startExtend({
+      slug: "kayak",
+      feature: "search",
+      requirementText: "add search",
+    });
+    expect(run.state).toBe("queued");
+    expect(run.slug).toBe("kayak");
+    expect(run.feature).toBe("search");
+  });
+
+  it("fires onProjectRegistered after the register step appends to loom.yaml", async () => {
+    const reloadCalls: number[] = [];
+    harness = await buildHarness();
+    harness.engine = new DesignEngine({
+      store: harness.store,
+      linear: createFakeLinear().client,
+      builder: createFakeBuilder(writeValidDesignDoc).runner,
+      reviewer: createFakeReviewer("pass").runner,
+      registry: buildRegistry([]),
+      designConfig: {
+        repoRoot: join(harness.dir, "repos"),
+        defaultBranch: "main",
+        devBranch: "dev",
+        linearTeamKey: "ENG",
+      },
+      loomConfigPath: harness.loomYamlPath,
+      artifactDir: join(harness.dir, "artifacts"),
+      builderTool: "codex",
+      reviewerTool: "claude",
+      ghRemote: async () => ({
+        outcome: "created",
+        remoteUrl: "https://github.com/example/alpha.git",
+      }),
+      onProjectRegistered: async () => {
+        reloadCalls.push(Date.now());
+      },
+    });
+
+    await harness.engine.startNew({ slug: "alpha", requirementText: "ship a thing" });
+    const drained = await harness.engine.drainNext();
+
+    expect(drained?.state).toBe("complete");
+    expect(reloadCalls).toHaveLength(1);
+  });
 });
 
 async function createAutoLinear(): Promise<ReturnType<typeof createFakeLinear>> {
   return createFakeLinear();
 }
+
+describe("resumeStateFor", () => {
+  function baseRun(overrides: Partial<DesignRunRecord> = {}): DesignRunRecord {
+    const now = Date.now();
+    return {
+      id: "r1",
+      slug: "alpha",
+      feature: null,
+      kind: "new",
+      state: "queued",
+      createdAt: now,
+      updatedAt: now,
+      requirement: { source: "text", ref: "build a thing" },
+      repoPath: "/repos/alpha",
+      remoteUrl: null,
+      designDocPath: null,
+      designDocSha: null,
+      reviewOutcome: null,
+      reviewFindings: null,
+      revisionApplied: false,
+      linearProjectId: null,
+      linearProjectUrl: null,
+      linearDocumentId: null,
+      linearDocumentUrl: null,
+      registeredAt: null,
+      failureReason: null,
+      queuePosition: null,
+      completedAt: null,
+      ...overrides,
+    };
+  }
+
+  it("resumes at publishing once the revision has been applied, even if Linear publish failed", () => {
+    const run = baseRun({
+      designDocSha: "sha-1",
+      designDocPath: "/repos/alpha/docs/design/alpha-design.md",
+      reviewOutcome: "revise",
+      revisionApplied: true,
+      linearProjectId: null,
+    });
+
+    expect(resumeStateFor(run)).toBe("publishing");
+  });
+
+  it("still resumes at revising when the revision has not been applied yet", () => {
+    const run = baseRun({
+      designDocSha: "sha-1",
+      designDocPath: "/repos/alpha/docs/design/alpha-design.md",
+      reviewOutcome: "revise",
+      revisionApplied: false,
+      linearProjectId: null,
+    });
+
+    expect(resumeStateFor(run)).toBe("revising");
+  });
+});

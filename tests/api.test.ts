@@ -282,6 +282,62 @@ describe("api server", () => {
   });
 });
 
+describe("config reload endpoint", () => {
+  it("invokes reloadConfig and returns the new project list", async () => {
+    const dependencies = createStubWorkflowDependencies();
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      linear: dependencies.linear,
+      worktrees: dependencies.worktrees,
+      builder: dependencies.builder,
+      reviewer: dependencies.reviewer,
+    });
+    let reloadCalls = 0;
+    const server = createApiServer({
+      engine,
+      scheduler: { schedule: () => {}, drainNow: async () => {} },
+      reloadConfig: async () => {
+        reloadCalls += 1;
+        return { projects: 2, slugs: ["loom", "kayak"] };
+      },
+      logger: pino({ level: "silent" }),
+    });
+
+    try {
+      const response = await server.inject({ method: "POST", url: "/config/reload" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ projects: 2, slugs: ["loom", "kayak"] });
+      expect(reloadCalls).toBe(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 503 when reloadConfig is not wired", async () => {
+    const dependencies = createStubWorkflowDependencies();
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      linear: dependencies.linear,
+      worktrees: dependencies.worktrees,
+      builder: dependencies.builder,
+      reviewer: dependencies.reviewer,
+    });
+    const server = createApiServer({
+      engine,
+      scheduler: { schedule: () => {}, drainNow: async () => {} },
+      logger: pino({ level: "silent" }),
+    });
+
+    try {
+      const response = await server.inject({ method: "POST", url: "/config/reload" });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: "config_reload_unavailable" });
+    } finally {
+      await server.close();
+    }
+  });
+});
+
 describe("artifact and log endpoints", () => {
   let tmpDir: string;
   let store: SqliteRunStore;
