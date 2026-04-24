@@ -21,6 +21,7 @@
   "files": [
     "dist/",
     "skills/",
+    "templates/",
     "scripts/postinstall.js",
     "AGENTS.md",
     "CLAUDE.md"

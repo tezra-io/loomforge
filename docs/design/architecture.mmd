@@ -1,0 +1,61 @@
+graph TB
+    subgraph OpenClaw ["OpenClaw (Front Door & Planner)"]
+        Chat["Chat with User"]
+        Plan["Design / Planning"]
+        Merge["Merge dev → main"]
+    end
+
+    subgraph Linear ["Linear"]
+        Issues["Issues"]
+    end
+
+    subgraph Loom ["Loom (Local Daemon — loomd)"]
+        MCP["MCP Server\n(stdio)"]
+        API["HTTP API\n(Fastify)"]
+        CLI["CLI\n(Commander)"]
+        LC["Linear Client\n(@linear/sdk)"]
+        WF["Workflow Engine\n(state machine)"]
+        Queue["Durable Ready\nQueue (FIFO)"]
+        DB["SQLite\nState Store"]
+        WT["Worktree\nManager"]
+        Art["Artifact Store\n(~/.loom/)"]
+        VR["Verification\nRunner"]
+
+        subgraph Runners ["AI Runners"]
+            Codex["Codex Builder\n(full-auto)"]
+            Claude["Claude Reviewer\n(skip-permissions)"]
+        end
+    end
+
+    subgraph ProjectConfig ["Project Config (YAML)"]
+        Reg["Project Registry"]
+        VerifyCmds["Verification\nCommands"]
+    end
+
+    subgraph Git ["Git"]
+        Repo["Local Repo"]
+        DevWT["dev branch\nworktree"]
+    end
+
+    Chat -->|selects issues| Plan
+    Plan -->|"issue ID + project slug"| MCP
+    MCP --> API
+    CLI -->|operator access| API
+    API --> WF
+    WF --> LC
+    LC -->|fetch issue details| Issues
+    LC -->|"status sync → Done"| Issues
+    WF --> Queue
+    WF --> DB
+    WF --> WT
+    WF --> VR
+    WF --> Codex
+    WF --> Claude
+    WF --> Art
+    VR -->|run checks| DevWT
+    Codex -->|"build + commit + push"| DevWT
+    Claude -->|review diff| DevWT
+    WT -->|"rebase dev on main"| DevWT
+    DevWT --> Repo
+    WF -->|"shipped notification"| Merge
+    ProjectConfig --> WF

@@ -3,7 +3,6 @@ dist/
 *.tsbuildinfo
 .env
 .env.*
-docs/design/
 .DS_store
 loom.yaml
 .loomforge-data/
