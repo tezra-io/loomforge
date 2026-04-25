@@ -155,18 +155,16 @@ async function ensureInitialCommit(cwd: string): Promise<void> {
   const hasCommit = await hasAnyCommit(cwd);
   if (hasCommit) return;
 
-  const add = await execa("git", ["add", "-A"], {
-    cwd,
-    env: childProcessEnv(),
-    reject: false,
-  });
+  const env = scaffoldCommitEnv();
+
+  const add = await execa("git", ["add", "-A"], { cwd, env, reject: false });
   if (add.exitCode !== 0) {
     throw new GitOperationError(`git add failed: ${add.stderr.trim()}`);
   }
 
   const commit = await execa("git", ["commit", "-m", "chore: initial loomforge scaffold"], {
     cwd,
-    env: childProcessEnv(),
+    env,
     reject: false,
   });
   if (commit.exitCode !== 0) {
@@ -174,6 +172,16 @@ async function ensureInitialCommit(cwd: string): Promise<void> {
       `git commit failed: ${commit.stderr.trim() || commit.stdout.trim()}`,
     );
   }
+}
+
+function scaffoldCommitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...childProcessEnv(),
+    GIT_AUTHOR_NAME: "Loomforge",
+    GIT_AUTHOR_EMAIL: "loomforge@local",
+    GIT_COMMITTER_NAME: "Loomforge",
+    GIT_COMMITTER_EMAIL: "loomforge@local",
+  };
 }
 
 async function hasAnyCommit(cwd: string): Promise<boolean> {
