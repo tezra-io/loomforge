@@ -109,6 +109,53 @@ describe("parseReviewerOutput", () => {
     expect(result.payload.findings.at(0)?.severity).toBe("P0");
   });
 
+  it("recovers a payload truncated before the outer closing brace", () => {
+    const full = JSON.stringify({
+      outcome: "revise",
+      findings: [{ severity: "P1", title: "T", detail: "D" }],
+      summary: "Address the crash before merging.",
+    });
+    const truncated = full.slice(0, -1);
+
+    const result = parseReviewerOutput(truncated);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.payload.outcome).toBe("revise");
+    expect(result.payload.findings).toHaveLength(1);
+  });
+
+  it("recovers a payload truncated after the summary string", () => {
+    const truncated = '{"outcome":"pass","findings":[],"summary":"All good"';
+
+    const result = parseReviewerOutput(truncated);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.payload.outcome).toBe("pass");
+    expect(result.payload.summary).toBe("All good");
+  });
+
+  it("recovers a payload with a trailing comma after the last field", () => {
+    const truncated = '{"outcome":"pass","findings":[],"summary":"OK",';
+
+    const result = parseReviewerOutput(truncated);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.payload.outcome).toBe("pass");
+  });
+
+  it("does not recover when truncation lands inside a string", () => {
+    const truncated = '{"outcome":"revise","findings":[],"summary":"unfinished';
+
+    const result = parseReviewerOutput(truncated);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("no_json");
+  });
+
   it("tolerates strings containing braces inside the JSON payload", () => {
     const stdout = JSON.stringify({
       outcome: "revise",

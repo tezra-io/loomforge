@@ -18,13 +18,19 @@ const MAX_CANDIDATES = 16;
 
 export function parseReviewerOutput(stdout: string): ReviewParseResult {
   const candidates = extractJsonCandidates(stdout);
-  if (candidates.length === 0) return { ok: false, reason: "no_json" };
 
   for (const candidate of candidates) {
     const parsed = tryParseReview(candidate);
     if (parsed) return { ok: true, payload: parsed };
   }
 
+  const recovered = recoverTruncatedJson(stdout);
+  if (recovered) {
+    const parsed = tryParseReview(recovered);
+    if (parsed) return { ok: true, payload: parsed };
+  }
+
+  if (candidates.length === 0) return { ok: false, reason: "no_json" };
   return { ok: false, reason: "invalid_shape" };
 }
 
@@ -59,6 +65,50 @@ function extractJsonCandidates(text: string): string[] {
   }
 
   return results;
+}
+
+function recoverTruncatedJson(text: string): string | null {
+  const stack: Array<"{" | "["> = [];
+  let outerStart = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === "\\") escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      if (stack.length === 0 && char === "{") outerStart = i;
+      stack.push(char);
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      if (stack.length === 0) continue;
+      stack.pop();
+      if (stack.length === 0) outerStart = -1;
+    }
+  }
+
+  if (inString) return null;
+  if (outerStart < 0 || stack.length === 0) return null;
+
+  const body = text.slice(outerStart).replace(/[\s,]+$/, "");
+  const closes = stack
+    .slice()
+    .reverse()
+    .map((open) => (open === "{" ? "}" : "]"))
+    .join("");
+  return body + closes;
 }
 
 function balancedBraceBlocks(text: string): string[] {
