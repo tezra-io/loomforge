@@ -256,12 +256,65 @@ linear:
 
     expect(config).toEqual({
       linear: { apiKey: "lin_api_xxxxx" },
+      design: null,
     });
   });
 
-  it("rejects global config without Linear API key", () => {
+  it("parses a design section with defaults", () => {
+    const config = parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+design:
+  repoRoot: /repos
+  defaultBranch: main
+  linearTeamKey: TEZ
+`);
+
+    expect(config.design).toEqual({
+      repoRoot: "/repos",
+      defaultBranch: "main",
+      devBranch: "dev",
+      linearTeamKey: "TEZ",
+    });
+  });
+
+  it("rejects design config whose devBranch equals defaultBranch", () => {
+    expect(() =>
+      parseGlobalConfig(`
+linear:
+  apiKey: lin_api_xxxxx
+design:
+  repoRoot: /repos
+  defaultBranch: main
+  devBranch: main
+  linearTeamKey: TEZ
+`),
+    ).toThrow(/devBranch must differ from design.defaultBranch/);
+  });
+
+  it("rejects an explicit empty Linear API key", () => {
     expect(() => parseGlobalConfig(`linear:\n  apiKey: ""`)).toThrow(/Invalid global config/);
-    expect(() => parseGlobalConfig(`{}`)).toThrow(/Invalid global config/);
+  });
+
+  it("accepts a config with no linear block when Linear is configured via the environment", () => {
+    const config = parseGlobalConfig(`
+design:
+  repoRoot: /repos
+  defaultBranch: main
+  linearTeamKey: TEZ
+`);
+
+    expect(config.linear).toBeUndefined();
+    expect(config.design).toEqual({
+      repoRoot: "/repos",
+      defaultBranch: "main",
+      devBranch: "dev",
+      linearTeamKey: "TEZ",
+    });
+  });
+
+  it("accepts an empty config", () => {
+    expect(parseGlobalConfig(`{}`)).toEqual({ linear: undefined, design: null });
   });
 
   it("rejects global config with unknown fields", () => {

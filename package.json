@@ -1,6 +1,6 @@
 {
   "name": "@tezra-io/loomforge",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "type": "module",
   "description": "Slim local workflow engine for agentic software delivery",
   "license": "MIT",
@@ -21,6 +21,7 @@
   "files": [
     "dist/",
     "skills/",
+    "templates/",
     "scripts/postinstall.js",
     "AGENTS.md",
     "CLAUDE.md"

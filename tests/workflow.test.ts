@@ -575,3 +575,38 @@ describe("submitProject", () => {
     expect(engine.getQueue()).toHaveLength(0);
   });
 });
+
+describe("setRegistry", () => {
+  it("makes newly registered projects available without restart", () => {
+    const { engine } = createEngine();
+
+    expect(() => engine.getProjectStatus("kayak")).toThrow(/Unknown project slug/);
+
+    const expanded = parseProjectConfigRegistry(
+      `
+projects:
+  - slug: loom
+    repoRoot: /repos/loom
+    defaultBranch: main
+    verification:
+      commands:
+        - name: test
+          command: pnpm test
+  - slug: kayak
+    repoRoot: /repos/kayak
+    defaultBranch: main
+    verification:
+      commands:
+        - name: test
+          command: pnpm test
+`,
+      { homeDir: "/Users/alice" },
+    );
+
+    engine.setRegistry(expanded);
+
+    const status = engine.getProjectStatus("kayak");
+    expect(status.done).toBe(false);
+    expect(status.shipped).toEqual([]);
+  });
+});

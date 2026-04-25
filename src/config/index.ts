@@ -84,13 +84,25 @@ const registrySchema = z
   })
   .strict();
 
+const designConfigSchema = z
+  .object({
+    repoRoot: pathSchema,
+    defaultBranch: nonEmptyStringSchema,
+    devBranch: nonEmptyStringSchema.optional(),
+    linearTeamKey: nonEmptyStringSchema,
+    githubOrg: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+
 const globalConfigSchema = z
   .object({
     linear: z
       .object({
-        apiKey: nonEmptyStringSchema,
+        apiKey: nonEmptyStringSchema.optional(),
       })
-      .strict(),
+      .strict()
+      .optional(),
+    design: designConfigSchema.optional(),
   })
   .strict();
 
@@ -156,10 +168,19 @@ export interface ProjectConfigRegistry {
   bySlug: Map<string, ProjectConfig>;
 }
 
+export interface DesignConfig {
+  repoRoot: string;
+  defaultBranch: string;
+  devBranch: string;
+  linearTeamKey: string;
+  githubOrg?: string;
+}
+
 export interface GlobalConfig {
-  linear: {
-    apiKey: string;
+  linear?: {
+    apiKey?: string;
   };
+  design: DesignConfig | null;
 }
 
 export interface OpenClawRunRequest {
@@ -241,7 +262,27 @@ export function parseGlobalConfig(configText: string): GlobalConfig {
     throw new Error("Invalid global config", { cause: parsed.error });
   }
 
-  return parsed.data;
+  const design = parsed.data.design;
+  const designConfig: DesignConfig | null = design
+    ? {
+        repoRoot: design.repoRoot,
+        defaultBranch: design.defaultBranch,
+        devBranch: design.devBranch ?? "dev",
+        linearTeamKey: design.linearTeamKey,
+        ...(design.githubOrg ? { githubOrg: design.githubOrg } : {}),
+      }
+    : null;
+
+  if (designConfig && designConfig.devBranch === designConfig.defaultBranch) {
+    throw new Error(
+      `Invalid global config: design.devBranch must differ from design.defaultBranch ("${designConfig.defaultBranch}")`,
+    );
+  }
+
+  return {
+    linear: parsed.data.linear,
+    design: designConfig,
+  };
 }
 
 function buildProjectConfigRegistry(

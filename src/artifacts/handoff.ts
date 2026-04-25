@@ -26,7 +26,10 @@ const reviewFindingSchema = z
     severity: z.enum(["P0", "P1", "P2"]),
     title: z.string().trim().min(1),
     detail: z.string().trim().min(1),
-    file: z.string().trim().min(1).optional(),
+    file: z.preprocess(
+      (value) => (typeof value === "string" && value.trim().length === 0 ? undefined : value),
+      z.string().trim().min(1).optional(),
+    ),
   })
   .strict();
 

@@ -92,6 +92,95 @@ export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
     },
   );
 
+  const slugSchema = z
+    .string()
+    .regex(
+      /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/,
+      "must be lowercase, hyphen-separated (^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$)",
+    );
+
+  mcp.tool(
+    "loom_design_new_project",
+    "Scaffold a new project, draft and review a design doc, publish to Linear, and optionally register it in loom.yaml. Exactly one of requirementPath or requirementText must be provided.",
+    {
+      slug: slugSchema.describe("Lowercase, hyphen-separated project slug"),
+      requirementPath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Absolute path to a requirement file on the daemon machine"),
+      requirementText: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Raw markdown text describing the requirement"),
+      repoRoot: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Override the default design.repoRoot from config"),
+      redraft: z.boolean().optional().describe("Force a fresh draft even if a prior draft exists"),
+    },
+    async ({ slug, requirementPath, requirementText, repoRoot, redraft }) => {
+      return safeCall(() =>
+        adapter.designNew({ slug, requirementPath, requirementText, repoRoot, redraft }),
+      );
+    },
+  );
+
+  mcp.tool(
+    "loom_design_extend_project",
+    "Draft a feature-extension design doc for an existing project and attach it as a new Linear Document.",
+    {
+      slug: slugSchema.describe("Existing project slug (must be in loom.yaml)"),
+      feature: slugSchema.describe("Lowercase, hyphen-separated feature slug"),
+      requirementPath: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Absolute path to a requirement file on the daemon machine"),
+      requirementText: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Raw markdown text describing the feature requirement"),
+      redraft: z.boolean().optional().describe("Force a fresh draft"),
+    },
+    async ({ slug, feature, requirementPath, requirementText, redraft }) => {
+      return safeCall(() =>
+        adapter.designExtend({ slug, feature, requirementPath, requirementText, redraft }),
+      );
+    },
+  );
+
+  mcp.tool(
+    "loom_get_design_run",
+    "Fetch current state, findings, and handoff for a design run",
+    { designRunId: z.string().min(1).describe("Design run ID") },
+    async ({ designRunId }) => safeCall(() => adapter.getDesignRun(designRunId)),
+  );
+
+  mcp.tool(
+    "loom_cancel_design_run",
+    "Cancel a queued or active design run",
+    { designRunId: z.string().min(1).describe("Design run ID") },
+    async ({ designRunId }) => safeCall(() => adapter.cancelDesignRun(designRunId)),
+  );
+
+  mcp.tool(
+    "loom_retry_design_run",
+    "Retry a failed or stuck design run from its last incomplete step",
+    { designRunId: z.string().min(1).describe("Design run ID") },
+    async ({ designRunId }) => safeCall(() => adapter.retryDesignRun(designRunId)),
+  );
+
+  mcp.tool(
+    "loom_get_design_run_status_for_project",
+    "Fetch the latest design-run state for a project slug (mirrors loom_get_project_status for the design surface)",
+    { slug: slugSchema.describe("Project slug") },
+    async ({ slug }) => safeCall(() => adapter.getDesignStatusForProject(slug)),
+  );
+
   return mcp;
 }
 

@@ -1,25 +1,48 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import pino, { type Logger } from "pino";
 
 import { ArtifactStore } from "../artifacts/index.js";
-import type { GlobalConfig, ProjectConfigRegistry } from "../config/index.js";
+import {
+  loadProjectConfigRegistry,
+  type GlobalConfig,
+  type ProjectConfigRegistry,
+} from "../config/index.js";
 import { SqliteRunStore } from "../db/index.js";
+import { DesignEngine, SqliteDesignRunStore, type DesignEngineOptions } from "../design/index.js";
 import { LinearWorkflowClientImpl, createMissingKeyClient } from "../linear/index.js";
-import { BuilderRunnerImpl, ReviewerRunnerImpl } from "../runners/index.js";
+import {
+  BuilderRunnerImpl,
+  DesignBuilderRunner,
+  DesignReviewerRunner,
+  ReviewerRunnerImpl,
+} from "../runners/index.js";
 import { WorkflowEngine } from "../workflow/index.js";
 import { GitWorkspaceManager } from "../worktrees/index.js";
 import { GhPullRequestCreator } from "../worktrees/pull-request-creator.js";
-import { createDrainScheduler, type DrainScheduler } from "./drain-scheduler.js";
+import {
+  createDrainScheduler,
+  createGenericDrainScheduler,
+  type DrainScheduler,
+} from "./drain-scheduler.js";
 
 const linearApiKeyPlaceholder = "lin_api_YOUR_KEY_HERE";
 
+export interface ReloadConfigResult {
+  projects: number;
+  slugs: string[];
+}
+
 export interface LoomRuntime {
   engine: WorkflowEngine;
+  designEngine: DesignEngine;
   scheduler: DrainScheduler;
+  designScheduler: DrainScheduler;
   store: SqliteRunStore;
   artifactStore: ArtifactStore;
   logger: Logger;
+  reloadConfig(): Promise<ReloadConfigResult>;
   close(): void;
 }
 
@@ -28,6 +51,7 @@ export interface CreateLoomRuntimeOptions {
   globalConfig?: GlobalConfig;
   dbPath?: string;
   logger?: Logger;
+  loomConfigPath?: string;
 }
 
 export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntime {
@@ -38,7 +62,7 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   const builder = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
   const reviewer = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
   const worktrees = new GitWorkspaceManager();
-  const linearApiKey = resolveLinearApiKey(options.globalConfig?.linear.apiKey, process.env);
+  const linearApiKey = resolveLinearApiKey(options.globalConfig?.linear?.apiKey, process.env);
   const linear = linearApiKey
     ? new LinearWorkflowClientImpl(linearApiKey)
     : createMissingKeyClient();
@@ -69,12 +93,51 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
   });
   const scheduler = createDrainScheduler(engine, logger);
 
+  const designStore = new SqliteDesignRunStore(store.rawDb());
+  const designArtifactDir = join(options.registry.runtime.dataRoot, "design-artifacts");
+  const loomConfigPath = options.loomConfigPath ?? join(homedir(), ".loomforge", "loom.yaml");
+  const reloadConfig = async (): Promise<ReloadConfigResult> => {
+    const next = await loadProjectConfigRegistry(loomConfigPath, { homeDir: homedir() });
+    engine.setRegistry(next);
+    designEngine.setRegistry(next);
+    logger.info({ projects: next.projects.length, path: loomConfigPath }, "registry reloaded");
+    return {
+      projects: next.projects.length,
+      slugs: next.projects.map((p) => p.slug),
+    };
+  };
+  const designEngineOptions: DesignEngineOptions = {
+    store: designStore,
+    linear,
+    builder: new DesignBuilderRunner(),
+    reviewer: new DesignReviewerRunner(),
+    registry: options.registry,
+    designConfig: options.globalConfig?.design ?? null,
+    loomConfigPath,
+    artifactDir: designArtifactDir,
+    builderTool: "codex",
+    reviewerTool: "claude",
+    logger: logger.child({ component: "design-engine" }),
+    onProjectRegistered: async () => {
+      await reloadConfig();
+    },
+  };
+  const designEngine = new DesignEngine(designEngineOptions);
+  const designScheduler = createGenericDrainScheduler(
+    designEngine,
+    logger.child({ component: "design-scheduler" }),
+    "design",
+  );
+
   return {
     engine,
+    designEngine,
     scheduler,
+    designScheduler,
     store,
     artifactStore: artifacts,
     logger,
+    reloadConfig,
     close: () => {
       store.close();
     },

@@ -27,6 +27,17 @@ function stubAdapter(overrides: Partial<LoomHttpAdapter> = {}): LoomHttpAdapter 
       cancelled: [],
       pullRequestUrl: null,
     }),
+    designNew: async () => ({ run: { id: "design-1", state: "complete" }, handoff: {} }),
+    designExtend: async () => ({ run: { id: "design-2", state: "complete" }, handoff: {} }),
+    getDesignRun: async () => ({ run: { id: "design-1", state: "complete" }, handoff: {} }),
+    cancelDesignRun: async () => ({ run: { id: "design-1", state: "cancelled" } }),
+    retryDesignRun: async () => ({ run: { id: "design-1", state: "drafting" } }),
+    getDesignStatusForProject: async () => ({
+      slug: "test",
+      hasRun: false,
+      latest: null,
+      features: [],
+    }),
     ...overrides,
   };
 }
@@ -67,12 +78,18 @@ describe("MCP server tools", () => {
     const result = await client.listTools();
     const names = result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      "loom_cancel_design_run",
       "loom_cancel_run",
       "loom_cleanup_workspace",
+      "loom_design_extend_project",
+      "loom_design_new_project",
+      "loom_get_design_run",
+      "loom_get_design_run_status_for_project",
       "loom_get_project_status",
       "loom_get_queue",
       "loom_get_run",
       "loom_health",
+      "loom_retry_design_run",
       "loom_retry_run",
       "loom_submit_project",
       "loom_submit_run",

@@ -1,6 +1,6 @@
 ---
 name: loomforge
-description: "Interact with the Loomforge workflow engine for agentic software delivery. Use whenever the user wants to submit Linear issues for building, check build/run status, manage the build queue, troubleshoot failed or blocked runs, kick off a nightly build, or ship issues for a project. Also use when the user asks about Loomforge setup, daemon health, or project configuration. Loomforge handles the full lifecycle: Linear fetch, build, review, push, pull request creation, and Linear status sync."
+description: "Interact with the Loomforge workflow engine for agentic software delivery. Use whenever the user wants to submit Linear issues for building, check build/run status, manage the build queue, troubleshoot failed or blocked runs, kick off a nightly build, or ship issues for a project. Also use for the design flow: scaffolding a new project from a rough requirement, drafting or extending a design doc, publishing to Linear, and registering the project for future builds. Also use when the user asks about Loomforge setup, daemon health, or project configuration. Loomforge handles both the pre-build design pipeline (scaffold → draft → review → publish) and the full execution lifecycle (Linear fetch, build, review, push, pull request creation, Linear status sync)."
 ---
 
 # Loomforge Workflow Engine
@@ -115,3 +115,98 @@ Append an entry to the `projects:` list in `~/.loomforge/loom.yaml`. Required
 fields: `slug`, `repoRoot`, `defaultBranch`, `verification.commands`. See
 `references/setup.md` for the full config schema and optional fields. Restart
 the daemon after editing.
+
+## Design Flow
+
+Design flow is a separate command surface that takes a rough requirement and
+produces a reviewed design doc, a Linear project (new) or Linear Document
+(extend), and — for new projects with a GitHub remote — a registered
+`loom.yaml` entry ready for the build workflow.
+
+### CLI
+
+```sh
+loomforge design new <slug> --requirement-path <file>
+loomforge design new <slug> --requirement-text "<markdown>"
+
+loomforge design extend <slug> --feature <feature-slug> --requirement-path <file>
+loomforge design extend <slug> --feature <feature-slug> --requirement-text "<markdown>"
+
+loomforge design get <designRunId>
+loomforge design cancel <designRunId>
+loomforge design retry <designRunId>
+loomforge design status <slug>
+```
+
+Input rules:
+- Exactly one of `--requirement-path` or `--requirement-text` must be provided.
+- `--requirement-path` is absolute on the daemon machine.
+- `slug` and `--feature` must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`
+  (lowercase, hyphen-separated).
+- `--redraft` forces a fresh draft; without it, retries resume from the last
+  incomplete step.
+
+### MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `loom_design_new_project` | Start a new-project design run |
+| `loom_design_extend_project` | Start an extend design run |
+| `loom_get_design_run` | Fetch state, findings, handoff |
+| `loom_cancel_design_run` | Cancel a queued or active run |
+| `loom_retry_design_run` | Retry a failed/stuck run |
+| `loom_get_design_run_status_for_project` | Latest run per project slug |
+
+### State machine
+
+```
+validating → scaffolding → drafting → reviewing
+  → (revising if reviewer said revise — one cycle, no re-review)
+  → publishing → registering → complete
+  → failed / blocked / cancelled (terminal)
+```
+
+Each step persists its durable artifact IDs (repo_path, remote_url,
+design_doc_sha, linear_project_id, linear_document_id) so retries pick up from
+the last incomplete step. `--redraft` clears `design_doc_sha` and downstream
+fields.
+
+### Handoff shape
+
+```json
+{
+  "version": 1,
+  "designRunId": "...",
+  "kind": "new",
+  "slug": "my-app",
+  "feature": null,
+  "state": "complete",
+  "localDocPath": "<repoRoot>/my-app/docs/design/my-app-design.md",
+  "linearProjectUrl": "https://linear.app/?project=...",
+  "linearDocumentUrl": "https://linear.app/?document=...",
+  "registration": "registered | needs_remote | skipped",
+  "notes": [],
+  "failureReason": null
+}
+```
+
+`registration: needs_remote` means the design pipeline completed but
+`loom.yaml` was not updated because there is no git remote yet. Set one up
+manually, then re-run to register.
+
+### Config
+
+Add a `design:` section to `~/.loomforge/config.yaml`:
+
+```yaml
+design:
+  repoRoot: ~/projects
+  defaultBranch: main
+  devBranch: dev        # optional
+  linearTeamKey: TEZ
+```
+
+### Troubleshooting
+
+See `references/design-flow.md` for failure reasons (`design_linear_conflict`,
+`design_document_conflict`, `design_review_blocked`, …) and template details.

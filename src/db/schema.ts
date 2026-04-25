@@ -1,10 +1,11 @@
-export const schemaVersion = 2;
+export const schemaVersion = 5;
 
 export interface SchemaMigration {
   version: number;
   sql: string;
   needsCheck?: boolean;
   checkColumn?: { table: string; column: string };
+  skipIfColumnExists?: { table: string; column: string };
   disableForeignKeys?: boolean;
 }
 
@@ -45,6 +46,56 @@ ALTER TABLE workspaces_v2 RENAME TO workspaces;
 -- Migrate handoff JSON: rename worktreePath to workspacePath
 UPDATE runs SET handoff_json = REPLACE(handoff_json, '"worktreePath"', '"workspacePath"')
   WHERE handoff_json IS NOT NULL AND handoff_json LIKE '%worktreePath%';
+`,
+  },
+  {
+    version: 3,
+    sql: `
+CREATE TABLE IF NOT EXISTS design_runs (
+  id                     TEXT PRIMARY KEY,
+  slug                   TEXT NOT NULL,
+  feature                TEXT,
+  kind                   TEXT NOT NULL,
+  state                  TEXT NOT NULL,
+  created_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL,
+  requirement_source     TEXT NOT NULL,
+  requirement_ref        TEXT NOT NULL,
+  repo_path              TEXT,
+  remote_url             TEXT,
+  design_doc_path        TEXT,
+  design_doc_sha         TEXT,
+  linear_project_id      TEXT,
+  linear_document_id     TEXT,
+  review_outcome         TEXT,
+  review_findings_json   TEXT,
+  failure_reason         TEXT,
+  completed_at           INTEGER,
+  UNIQUE (slug, feature)
+);
+
+CREATE INDEX IF NOT EXISTS design_runs_state_idx ON design_runs(state);
+`,
+  },
+  {
+    version: 4,
+    skipIfColumnExists: { table: "design_runs", column: "linear_project_url" },
+    sql: `
+ALTER TABLE design_runs ADD COLUMN linear_project_url TEXT;
+ALTER TABLE design_runs ADD COLUMN linear_document_url TEXT;
+ALTER TABLE design_runs ADD COLUMN queue_position INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS design_runs_slug_null_feature_uq
+  ON design_runs(slug) WHERE feature IS NULL;
+CREATE INDEX IF NOT EXISTS design_runs_queue_idx
+  ON design_runs(queue_position) WHERE queue_position IS NOT NULL;
+`,
+  },
+  {
+    version: 5,
+    skipIfColumnExists: { table: "design_runs", column: "revision_applied" },
+    sql: `
+ALTER TABLE design_runs ADD COLUMN revision_applied INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE design_runs ADD COLUMN registered_at INTEGER;
 `,
   },
 ];
@@ -153,7 +204,40 @@ CREATE TABLE IF NOT EXISTS events (
   FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS design_runs (
+  id                     TEXT PRIMARY KEY,
+  slug                   TEXT NOT NULL,
+  feature                TEXT,
+  kind                   TEXT NOT NULL,
+  state                  TEXT NOT NULL,
+  created_at             INTEGER NOT NULL,
+  updated_at             INTEGER NOT NULL,
+  requirement_source     TEXT NOT NULL,
+  requirement_ref        TEXT NOT NULL,
+  repo_path              TEXT,
+  remote_url             TEXT,
+  design_doc_path        TEXT,
+  design_doc_sha         TEXT,
+  linear_project_id      TEXT,
+  linear_project_url     TEXT,
+  linear_document_id     TEXT,
+  linear_document_url    TEXT,
+  review_outcome         TEXT,
+  review_findings_json   TEXT,
+  revision_applied       INTEGER NOT NULL DEFAULT 0,
+  registered_at          INTEGER,
+  failure_reason         TEXT,
+  queue_position         INTEGER,
+  completed_at           INTEGER,
+  UNIQUE (slug, feature)
+);
+
 CREATE INDEX IF NOT EXISTS runs_project_state_idx ON runs(project_slug, state);
 CREATE INDEX IF NOT EXISTS runs_queue_idx ON runs(queue_position) WHERE queue_position IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_run_created_idx ON events(run_id, created_at);
+CREATE INDEX IF NOT EXISTS design_runs_state_idx ON design_runs(state);
+CREATE UNIQUE INDEX IF NOT EXISTS design_runs_slug_null_feature_uq
+  ON design_runs(slug) WHERE feature IS NULL;
+CREATE INDEX IF NOT EXISTS design_runs_queue_idx
+  ON design_runs(queue_position) WHERE queue_position IS NOT NULL;
 `;

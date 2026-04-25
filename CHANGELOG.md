@@ -1,5 +1,18 @@
 # @tezra-io/loomforge
 
+## 0.2.0
+
+### Minor Changes
+
+- Add the design flow: scaffold → draft → review → publish → register for new projects and feature extensions.
+  - New CLI commands: `loomforge design new|extend|get|cancel|retry|status`.
+  - New MCP tools: `loom_design_new_project`, `loom_design_extend_project`, `loom_get_design_run`, `loom_cancel_design_run`, `loom_retry_design_run`, `loom_get_design_run_status_for_project`.
+  - New global config block `design:` with `repoRoot`, `defaultBranch`, `devBranch`, `linearTeamKey`, and optional `githubOrg` (creates new repos under the given GitHub org instead of the authenticated user).
+  - `loomforge setup` now prompts for design-flow settings and appends the `design:` block automatically; the target `repoRoot` is created if it does not exist.
+  - Design engine now logs each state transition at `info` (and `warn` on `failed`/`blocked`) through pino, matching the workflow engine shape.
+  - SQLite schema bumped to v5 for the design-run store; non-terminal design runs are re-enqueued on daemon startup.
+  - Requirement paths are validated against a safe-root policy (absolute, `.md` or `.txt`, ≤256 KiB, no hidden segments).
+
 ## 0.1.7
 
 ### Patch Changes

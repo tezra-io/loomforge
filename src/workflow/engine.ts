@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ProjectConfig } from "../config/index.js";
 import { LinearAuthError } from "../linear/index.js";
+import { buildMergePr, type ShippedIssue } from "./project-completion-pr.js";
 import type {
   ArtifactMeta,
   ArtifactWriter,
@@ -606,32 +607,24 @@ export class WorkflowEngine {
     if (projectRuns.length === 0) return;
 
     const shipped: string[] = [];
+    const shippedIssues: ShippedIssue[] = [];
     const failed: string[] = [];
     const blocked: string[] = [];
     const cancelled: string[] = [];
 
     for (const r of projectRuns) {
-      if (r.state === "shipped") shipped.push(r.issueId);
-      else if (r.state === "failed") failed.push(r.issueId);
+      if (r.state === "shipped") {
+        shipped.push(r.issueId);
+        shippedIssues.push({ id: r.issueId, title: r.issueSnapshot?.title ?? null });
+      } else if (r.state === "failed") failed.push(r.issueId);
       else if (r.state === "blocked") blocked.push(r.issueId);
       else if (r.state === "cancelled") cancelled.push(r.issueId);
     }
 
     let pullRequestUrl: string | null = null;
-    if (shipped.length > 0 && this.options.pullRequests) {
+    if (shippedIssues.length > 0 && this.options.pullRequests) {
       const project = this.projectForSlug(projectSlug);
-      const title = `[${projectSlug}] Merge dev → ${project.defaultBranch}`;
-      const body = [
-        `## Shipped issues (${shipped.length})`,
-        ...shipped.map((id) => `- ${id}`),
-        "",
-        ...(failed.length > 0
-          ? [`## Failed (${failed.length})`, ...failed.map((id) => `- ${id}`), ""]
-          : []),
-        ...(blocked.length > 0
-          ? [`## Blocked (${blocked.length})`, ...blocked.map((id) => `- ${id}`), ""]
-          : []),
-      ].join("\n");
+      const { title, body } = buildMergePr(projectSlug, project.defaultBranch, shippedIssues);
 
       try {
         const pr = await this.options.pullRequests.createPr(project, title, body);
@@ -666,6 +659,10 @@ export class WorkflowEngine {
 
   private isIdle(): boolean {
     return this.activeRunId === null && this.queue.length === 0;
+  }
+
+  setRegistry(registry: WorkflowEngineOptions["registry"]): void {
+    this.options.registry = registry;
   }
 
   private projectForSlug(projectSlug: string): ProjectConfig {

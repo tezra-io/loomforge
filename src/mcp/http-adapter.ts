@@ -1,5 +1,21 @@
 import { requestJson, type LoomHttpClientOptions } from "../cli/http-client.js";
 
+export interface DesignNewPayload {
+  slug: string;
+  requirementPath?: string;
+  requirementText?: string;
+  repoRoot?: string;
+  redraft?: boolean;
+}
+
+export interface DesignExtendPayload {
+  slug: string;
+  feature: string;
+  requirementPath?: string;
+  requirementText?: string;
+  redraft?: boolean;
+}
+
 export interface LoomHttpAdapter {
   health(): Promise<unknown>;
   getQueue(): Promise<unknown>;
@@ -10,6 +26,12 @@ export interface LoomHttpAdapter {
   cleanupWorkspace(projectSlug: string): Promise<unknown>;
   submitProject(projectSlug: string): Promise<unknown>;
   getProjectStatus(projectSlug: string): Promise<unknown>;
+  designNew(payload: DesignNewPayload): Promise<unknown>;
+  designExtend(payload: DesignExtendPayload): Promise<unknown>;
+  getDesignRun(designRunId: string): Promise<unknown>;
+  cancelDesignRun(designRunId: string): Promise<unknown>;
+  retryDesignRun(designRunId: string): Promise<unknown>;
+  getDesignStatusForProject(slug: string): Promise<unknown>;
 }
 
 export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapter {
@@ -27,5 +49,13 @@ export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapt
       requestJson(options, "POST", "/projects/submit", { projectSlug }),
     getProjectStatus: (projectSlug) =>
       requestJson(options, "GET", `/projects/${encodeURIComponent(projectSlug)}/status`),
+    designNew: (payload) => requestJson(options, "POST", "/design/new", payload),
+    designExtend: (payload) => requestJson(options, "POST", "/design/extend", payload),
+    getDesignRun: (id) => requestJson(options, "GET", `/design/${encodeURIComponent(id)}`),
+    cancelDesignRun: (id) =>
+      requestJson(options, "POST", `/design/${encodeURIComponent(id)}/cancel`),
+    retryDesignRun: (id) => requestJson(options, "POST", `/design/${encodeURIComponent(id)}/retry`),
+    getDesignStatusForProject: (slug) =>
+      requestJson(options, "GET", `/design/projects/${encodeURIComponent(slug)}/status`),
   };
 }

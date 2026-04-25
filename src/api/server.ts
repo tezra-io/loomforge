@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { ArtifactStore } from "../artifacts/index.js";
 import type { DrainScheduler } from "../app/drain-scheduler.js";
 import type { SqliteRunStore } from "../db/index.js";
+import type { DesignEngine } from "../design/index.js";
+import { buildHandoff } from "../design/index.js";
 import type { WorkflowEngine } from "../workflow/index.js";
 
 const submitRunSchema = z
@@ -38,8 +40,45 @@ export interface CreateApiServerOptions {
   scheduler: DrainScheduler;
   store?: SqliteRunStore;
   artifactStore?: ArtifactStore;
+  designEngine?: DesignEngine;
+  designScheduler?: DrainScheduler;
+  reloadConfig?: () => Promise<{ projects: number; slugs: string[] }>;
   logger: Logger;
 }
+
+const slugPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const slugSchema = z.string().regex(slugPattern);
+
+const designNewSchema = z
+  .object({
+    slug: slugSchema,
+    requirementPath: z.string().trim().min(1).optional(),
+    requirementText: z.string().trim().min(1).optional(),
+    repoRoot: z.string().trim().min(1).optional(),
+    redraft: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (v) => Boolean(v.requirementPath) !== Boolean(v.requirementText),
+    "Exactly one of requirementPath or requirementText must be provided",
+  );
+
+const designExtendSchema = z
+  .object({
+    slug: slugSchema,
+    feature: slugSchema,
+    requirementPath: z.string().trim().min(1).optional(),
+    requirementText: z.string().trim().min(1).optional(),
+    redraft: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (v) => Boolean(v.requirementPath) !== Boolean(v.requirementText),
+    "Exactly one of requirementPath or requirementText must be provided",
+  );
+
+const designIdParamSchema = z.object({ id: z.string().trim().min(1) }).strict();
+const designSlugParamSchema = z.object({ slug: slugSchema }).strict();
 
 export function createApiServer(options: CreateApiServerOptions) {
   const server = Fastify({ loggerInstance: options.logger });
@@ -52,6 +91,19 @@ export function createApiServer(options: CreateApiServerOptions) {
   server.get("/queue", async () => ({
     data: options.engine.getQueue(),
   }));
+
+  server.post("/config/reload", async (_request, reply) => {
+    if (!options.reloadConfig) {
+      return reply.code(503).send({ error: "config_reload_unavailable" });
+    }
+    try {
+      const result = await options.reloadConfig();
+      return reply.code(200).send(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(500).send({ error: "config_reload_failed", details: message });
+    }
+  });
 
   server.post("/runs", async (request, reply) => {
     const parsed = submitRunSchema.safeParse(request.body);
@@ -217,6 +269,99 @@ export function createApiServer(options: CreateApiServerOptions) {
 
     return { logs: logs.filter((l) => l.content !== null) };
   });
+
+  if (options.designEngine) {
+    const designEngine = options.designEngine;
+    const designScheduler = options.designScheduler;
+
+    server.post("/design/new", async (request, reply) => {
+      const parsed = designNewSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+
+      try {
+        const run = await designEngine.startNew(parsed.data);
+        const handoff = buildHandoff(run, []);
+        designScheduler?.schedule();
+        return reply.code(202).send({ run: cloneJson(run), handoff });
+      } catch (error) {
+        return reply.code(400).send({ error: errorMessage(error) });
+      }
+    });
+
+    server.post("/design/extend", async (request, reply) => {
+      const parsed = designExtendSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+
+      try {
+        const run = await designEngine.startExtend(parsed.data);
+        const handoff = buildHandoff(run, []);
+        designScheduler?.schedule();
+        return reply.code(202).send({ run: cloneJson(run), handoff });
+      } catch (error) {
+        return reply.code(400).send({ error: errorMessage(error) });
+      }
+    });
+
+    server.get("/design/:id", async (request, reply) => {
+      const parsed = designIdParamSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+      const run = designEngine.get(parsed.data.id);
+      if (!run) {
+        return reply.code(404).send({ error: "design_run_not_found" });
+      }
+      return { run: cloneJson(run), handoff: buildHandoff(run, []) };
+    });
+
+    server.post("/design/:id/cancel", async (request, reply) => {
+      const parsed = designIdParamSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+      try {
+        const run = designEngine.cancel(parsed.data.id);
+        return { run: cloneJson(run) };
+      } catch (error) {
+        const message = errorMessage(error);
+        if (message.includes("Unknown design run")) {
+          return reply.code(404).send({ error: "design_run_not_found" });
+        }
+        return reply.code(400).send({ error: message });
+      }
+    });
+
+    server.post("/design/:id/retry", async (request, reply) => {
+      const parsed = designIdParamSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+      try {
+        const run = await designEngine.retry(parsed.data.id);
+        designScheduler?.schedule();
+        return { run: cloneJson(run) };
+      } catch (error) {
+        const message = errorMessage(error);
+        if (message.includes("Unknown design run")) {
+          return reply.code(404).send({ error: "design_run_not_found" });
+        }
+        return reply.code(400).send({ error: message });
+      }
+    });
+
+    server.get("/design/projects/:slug/status", async (request, reply) => {
+      const parsed = designSlugParamSchema.safeParse(request.params);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      }
+      const status = designEngine.getStatusForProject(parsed.data.slug);
+      return cloneJson(status);
+    });
+  }
 
   return server;
 }

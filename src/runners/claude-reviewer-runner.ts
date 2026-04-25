@@ -2,15 +2,11 @@ import { join } from "node:path";
 
 import { execa } from "execa";
 
-import type {
-  ReviewerRunner,
-  ReviewFinding,
-  ReviewResult,
-  WorkflowStepContext,
-} from "../workflow/types.js";
+import type { ReviewerRunner, ReviewResult, WorkflowStepContext } from "../workflow/types.js";
 import { agentCommand, type AgentTool } from "./codex-builder-runner.js";
 import { runProcess, isRunnerAuthError } from "./process-runner.js";
 import { reviewPrompt } from "./prompts/reviewer.js";
+import { parseReviewerOutput } from "./review-output-parser.js";
 
 export interface ReviewerRunnerOptions {
   artifactDir: string;
@@ -72,45 +68,7 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
       };
     }
 
-    return this.parseReviewOutput(result.stdout, result.stdoutLogPath);
-  }
-
-  private parseReviewOutput(stdout: string, logPath: string): ReviewResult {
-    const jsonText = extractJson(stdout);
-    if (!jsonText) {
-      return {
-        outcome: "blocked",
-        findings: [],
-        summary: "Reviewer output did not contain valid JSON",
-        rawLogPath: logPath,
-      };
-    }
-
-    try {
-      const parsed = JSON.parse(jsonText) as unknown;
-      if (!isReviewOutput(parsed)) {
-        return {
-          outcome: "blocked",
-          findings: [],
-          summary: "Reviewer output JSON has unexpected shape",
-          rawLogPath: logPath,
-        };
-      }
-
-      return {
-        outcome: parsed.outcome,
-        findings: parsed.findings.filter(isValidFinding),
-        summary: parsed.summary,
-        rawLogPath: logPath,
-      };
-    } catch {
-      return {
-        outcome: "blocked",
-        findings: [],
-        summary: "Failed to parse reviewer JSON output",
-        rawLogPath: logPath,
-      };
-    }
+    return buildReviewResult(result.stdout, result.stdoutLogPath);
   }
 
   private async getDiff(cwd: string, defaultBranch: string): Promise<string> {
@@ -126,39 +84,27 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
   }
 }
 
-interface RawReviewOutput {
-  outcome: "pass" | "revise" | "blocked";
-  findings: unknown[];
-  summary: string;
-}
+function buildReviewResult(stdout: string, rawLogPath: string): ReviewResult {
+  const parsed = parseReviewerOutput(stdout);
+  if (parsed.ok) {
+    return {
+      outcome: parsed.payload.outcome,
+      findings: parsed.payload.findings,
+      summary: parsed.payload.summary,
+      rawLogPath,
+    };
+  }
 
-function isReviewOutput(value: unknown): value is RawReviewOutput {
-  if (typeof value !== "object" || value === null) return false;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.outcome !== "string") return false;
-  if (!["pass", "revise", "blocked"].includes(obj.outcome)) return false;
-  if (!Array.isArray(obj.findings)) return false;
-  if (typeof obj.summary !== "string") return false;
-  return true;
-}
-
-function isValidFinding(value: unknown): value is ReviewFinding {
-  if (typeof value !== "object" || value === null) return false;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.severity !== "string" || !["P0", "P1", "P2"].includes(obj.severity)) return false;
-  if (typeof obj.title !== "string") return false;
-  if (typeof obj.detail !== "string") return false;
-  return true;
-}
-
-function extractJson(text: string): string | null {
-  const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenced?.[1]) return fenced[1].trim();
-
-  const braceMatch = text.match(/\{[\s\S]*\}/);
-  if (braceMatch) return braceMatch[0];
-
-  return null;
+  const summary =
+    parsed.reason === "no_json"
+      ? "Reviewer output did not contain valid JSON"
+      : "Reviewer output JSON has unexpected shape";
+  return {
+    outcome: "blocked",
+    findings: [],
+    summary,
+    rawLogPath,
+  };
 }
 
 function truncate(text: string, maxLength: number): string {

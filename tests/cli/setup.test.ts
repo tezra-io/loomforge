@@ -155,4 +155,134 @@ describe("runSetup", () => {
     expect(writes.join("")).toContain("--agent claude-code");
     expect(exitCode).toBe(1);
   });
+
+  it("prompts for design config and appends a design block when missing", async () => {
+    const writes: string[] = [];
+    const mkdirs: string[] = [];
+    const appends: Array<{ path: string; content: string }> = [];
+    const answers = ["1", "", "", ""]; // agents: 1, design repoRoot: default, team: default, org: blank
+
+    await runSetup({
+      appendTextFile: (path, content) => {
+        appends.push({ path, content });
+      },
+      execFile: (_file, _commandArgs, _options) => "",
+      fileExists: (path) => {
+        if (path.endsWith("config.yaml")) return true;
+        if (path.endsWith("loom.yaml")) return true;
+        if (path.endsWith("/loom")) return true;
+        return false; // repoRoot default does not exist yet
+      },
+      homeDir: () => "/Users/alice",
+      isInteractive: true,
+      mkdir: (path) => {
+        mkdirs.push(path);
+      },
+      prompt: async () => answers.shift() ?? "",
+      readTextFile: (path, _encoding) =>
+        path.endsWith("config.yaml")
+          ? "linear:\n  apiKey: lin_api_real\n"
+          : "projects:\n  - slug: loom\n",
+      setExitCode: () => undefined,
+      write: (text) => {
+        writes.push(text);
+      },
+    });
+
+    expect(mkdirs).toContain("/Users/alice/projects");
+    expect(appends).toHaveLength(1);
+    expect(appends[0]?.path.endsWith("config.yaml")).toBe(true);
+    expect(appends[0]?.content).toContain("design:");
+    expect(appends[0]?.content).toContain("repoRoot: /Users/alice/projects");
+    expect(appends[0]?.content).toContain("defaultBranch: main");
+    expect(appends[0]?.content).toContain("devBranch: dev");
+    expect(appends[0]?.content).toContain("linearTeamKey: TEZ");
+    expect(appends[0]?.content).not.toContain("githubOrg:");
+    expect(writes.join("")).toContain("Design flow configured");
+  });
+
+  it("writes githubOrg when the operator supplies one", async () => {
+    const appends: Array<{ path: string; content: string }> = [];
+    const answers = ["1", "", "", "tezra-io"];
+
+    await runSetup({
+      appendTextFile: (path, content) => {
+        appends.push({ path, content });
+      },
+      execFile: (_file, _commandArgs, _options) => "",
+      fileExists: (path) =>
+        path.endsWith("config.yaml") || path.endsWith("loom.yaml") || path.endsWith("/loom"),
+      homeDir: () => "/Users/alice",
+      isInteractive: true,
+      mkdir: () => undefined,
+      prompt: async () => answers.shift() ?? "",
+      readTextFile: (path, _encoding) =>
+        path.endsWith("config.yaml")
+          ? "linear:\n  apiKey: lin_api_real\n"
+          : "projects:\n  - slug: loom\n",
+      setExitCode: () => undefined,
+      write: () => undefined,
+    });
+
+    expect(appends[0]?.content).toContain("githubOrg: tezra-io");
+  });
+
+  it("skips design config when already present in config.yaml", async () => {
+    const writes: string[] = [];
+    const appends: Array<{ path: string; content: string }> = [];
+
+    await runSetup({
+      appendTextFile: (path, content) => {
+        appends.push({ path, content });
+      },
+      execFile: (_file, _commandArgs, _options) => "",
+      fileExists: (path) =>
+        path.endsWith("config.yaml") || path.endsWith("loom.yaml") || path.endsWith("/loom"),
+      homeDir: () => "/Users/alice",
+      isInteractive: true,
+      prompt: async () => "1",
+      readTextFile: (path, _encoding) =>
+        path.endsWith("config.yaml")
+          ? "linear:\n  apiKey: lin_api_real\ndesign:\n  repoRoot: /Users/alice/work\n  defaultBranch: main\n  linearTeamKey: TEZ\n"
+          : "projects:\n  - slug: loom\n",
+      setExitCode: () => undefined,
+      write: (text) => {
+        writes.push(text);
+      },
+    });
+
+    expect(appends).toHaveLength(0);
+    expect(writes.join("")).toContain("Design flow already configured");
+  });
+
+  it("skips design prompts in non-interactive mode without failing", async () => {
+    const writes: string[] = [];
+    const appends: Array<{ path: string; content: string }> = [];
+    let exitCode: number | undefined;
+
+    await runSetup({
+      appendTextFile: (path, content) => {
+        appends.push({ path, content });
+      },
+      execFile: (_file, _commandArgs, _options) => "",
+      fileExists: (path) =>
+        path.endsWith("config.yaml") || path.endsWith("loom.yaml") || path.endsWith("/loom"),
+      homeDir: () => "/Users/alice",
+      isInteractive: false,
+      readTextFile: (path, _encoding) =>
+        path.endsWith("config.yaml")
+          ? "linear:\n  apiKey: lin_api_real\n"
+          : "projects:\n  - slug: loom\n",
+      setExitCode: (code) => {
+        exitCode = code;
+      },
+      write: (text) => {
+        writes.push(text);
+      },
+    });
+
+    expect(appends).toHaveLength(0);
+    expect(writes.join("")).toContain("Design flow setup skipped");
+    expect(exitCode).toBe(1); // agent selection still fails in non-interactive, sets exitCode
+  });
 });
