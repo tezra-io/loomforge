@@ -195,8 +195,10 @@ Build in this order. Tests before code at each step.
 6. **`loomforge run "<prompt>" --project <slug-or-path>`** in `src/cli/program.ts`. Tested via the existing CLI integration harness.
 7. **`loom_submit_adhoc`** MCP tool in `src/mcp/server.ts` + adapter binding. Tested via the existing MCP harness.
 8. **Manual verification** — submit an ad-hoc run against `loom-test`, observe: Linear issue created with label, run flows through to `shipped`, Linear issue closed.
+9. **`skills/loomforge/SKILL.md`** — add an "Ad-hoc run" section alongside the existing CLI Commands / Project Lifecycle / Design Flow sections. Cover: when to use it, the `loomforge run` CLI, the `loom_submit_adhoc` MCP tool, the required `--project` argument (with the OpenClaw-CWD safety reasoning), and the error surfaces an operator will hit.
+10. **`README.md`** — under Usage, add an "Ad-hoc run" subsection between "Issue build flow" and "Design flow". Include the CLI command, a one-paragraph description, and a link or pointer to the skill for deeper detail. Update the Table of Contents accordingly.
 
-Stop after step 4 + manual smoke against `loom-test`. Only ship the surfaces (5–7) once the orchestrator produces a clean end-to-end run.
+Stop after step 4 + manual smoke against `loom-test`. Only ship the surfaces (5–7) once the orchestrator produces a clean end-to-end run. Steps 9–10 land last so the docs match shipped behavior.
 
 ## Testing approach
 
