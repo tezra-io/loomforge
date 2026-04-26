@@ -2,6 +2,8 @@ import type { ProjectConfig, ProjectConfigRegistry } from "../config/index.js";
 
 export type ExecutionMode = "run_now_if_idle" | "enqueue";
 
+export type RunSource = "linear" | "adhoc";
+
 export type RunState =
   | "queued"
   | "preparing_workspace"
@@ -37,6 +39,7 @@ export interface SubmitRunInput {
   projectSlug: string;
   issueId: string;
   executionMode: ExecutionMode;
+  source?: RunSource;
 }
 
 export interface IssueSnapshot {
@@ -146,6 +149,7 @@ export interface RunRecord {
   id: string;
   projectSlug: string;
   issueId: string;
+  source: RunSource;
   state: RunState;
   failureReason: FailureReason | null;
   revisionCount: number;

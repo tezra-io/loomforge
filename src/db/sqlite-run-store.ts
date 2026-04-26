@@ -229,8 +229,9 @@ export class SqliteRunStore implements WorkflowRunStore {
       .prepare(
         `INSERT INTO runs (
           id, project_slug, issue_id, state, failure_reason, revision_count,
-          queue_position, issue_snapshot_json, handoff_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          queue_position, issue_snapshot_json, handoff_json, source,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           project_slug = excluded.project_slug,
           issue_id = excluded.issue_id,
@@ -240,6 +241,7 @@ export class SqliteRunStore implements WorkflowRunStore {
           queue_position = excluded.queue_position,
           issue_snapshot_json = excluded.issue_snapshot_json,
           handoff_json = excluded.handoff_json,
+          source = excluded.source,
           updated_at = excluded.updated_at`,
       )
       .run(
@@ -252,6 +254,7 @@ export class SqliteRunStore implements WorkflowRunStore {
         run.queuePosition,
         stringifyNullable(run.issueSnapshot),
         stringifyNullable(run.handoff),
+        run.source,
         run.createdAt,
         run.updatedAt,
       );
@@ -382,10 +385,13 @@ export class SqliteRunStore implements WorkflowRunStore {
 
   private toRun(row: Row): RunRecord {
     const runId = readString(row, "id");
+    const sourceValue = row["source"];
+    const source: RunRecord["source"] = sourceValue === "adhoc" ? "adhoc" : "linear";
     return {
       id: runId,
       projectSlug: readString(row, "project_slug"),
       issueId: readString(row, "issue_id"),
+      source,
       state: readString(row, "state") as RunState,
       failureReason: readNullableString(row, "failure_reason") as RunRecord["failureReason"],
       revisionCount: readNumber(row, "revision_count"),
