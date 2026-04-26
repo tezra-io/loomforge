@@ -90,6 +90,58 @@ The run output includes a JSON body with completion status:
 - Some failed/blocked → report which issues and why, offer to retry
 - All failed → investigate root cause before retrying
 
+## Ad-hoc Run
+
+Use ad-hoc when you have a small, well-scoped task and don't want to hand-author a Linear issue first. Loomforge creates the Linear issue from your prompt, then runs the normal build pipeline against it. The Linear issue is the system of record — it gets a `loomforge-adhoc` label, transitions through "in progress" / "done" like any other ticket, and closes when the run ships.
+
+### When to use
+- Quick fixes, refactors, doc tweaks — anything you'd describe in 1–3 sentences.
+- Tasks too small to be worth opening a Linear ticket by hand.
+- Anything OpenClaw decides to fire off without going through the planning flow first.
+
+### When NOT to use
+- A feature that needs decomposition into multiple tickets — use the planning flow.
+- A project without Linear configured — ad-hoc requires `linearTeamKey` and `linearProjectName` in `loom.yaml`.
+
+### CLI
+
+```bash
+loomforge adhoc "Fix the typo in README" --project loom
+loomforge adhoc "Update the CHANGELOG for 0.3.0" --project /Users/me/code/loom
+```
+
+`--project` is **required** and accepts either a registered slug or an absolute path to the repo root. There is no CWD fallback — Loomforge is typically invoked by OpenClaw whose working directory is OpenClaw's repo, not the target project. Falling back to CWD would silently target the wrong repo.
+
+The command prints the run ID, the synthesized Linear identifier, the Linear URL, and the queue position. Track the run with `loomforge get <runId>` like any other.
+
+### MCP
+
+```text
+loom_submit_adhoc({
+  project: "loom",
+  prompt: "Fix the typo in README",
+})
+```
+
+Returns the same payload as the CLI.
+
+### What gets created in Linear
+
+- One issue, titled with the first non-empty line of the prompt (truncated at 80 chars).
+- Description = full prompt + a dated footer (`_Submitted via Loomforge ad-hoc on YYYY-MM-DD._`).
+- Label `loomforge-adhoc` (created lazily on first submit per workspace).
+- Placed in the team's `Backlog` workflow state. The engine then transitions it through "in progress" / "done" via the existing Linear status sync.
+
+### Errors you might see
+
+| Status | Error | What to do |
+|---|---|---|
+| 400 | `validation_failed` | Check the prompt is non-empty and ≤ 8000 chars; project must be a slug or absolute path. |
+| 404 | `project_not_found` | Register the project in `~/.loomforge/loom.yaml` first. |
+| 409 | `linear_not_configured` | Add `linearTeamKey` and `linearProjectName` to the project entry. |
+| 502 | `linear_create_failed` (with `reason`) | Check Linear API key, team/project name, label permissions, or that a `Backlog` workflow state exists on the team. |
+| 500 | `submit_after_create_failed` (with `orphanedIssueId`) | Linear issue was created but the local DB write failed. Inspect the issue manually or delete it; Loomforge does not auto-clean. |
+
 ## Troubleshooting
 
 - **Run failed** — check `failureReason` in `loomforge get <runId>`:

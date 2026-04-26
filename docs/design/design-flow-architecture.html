@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loomforge Design Flow Architecture</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #fafbfc;
+      min-height: 100vh;
+      padding: 2.5rem;
+      color: #1e293b;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; }
+
+    .header { margin-bottom: 1.5rem; }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      color: #64748b;
+      font-size: 0.875rem;
+      margin-top: 0.25rem;
+      font-weight: 400;
+    }
+
+    .diagram-container {
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      padding: 1.5rem;
+      overflow-x: auto;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    svg {
+      width: 100%;
+      min-width: 900px;
+      display: block;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      padding: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .card-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .card-dot.blue { background: #3b82f6; }
+    .card-dot.green { background: #10b981; }
+    .card-dot.indigo { background: #6366f1; }
+
+    .card h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .card ul {
+      list-style: none;
+      color: #64748b;
+      font-size: 0.75rem;
+      line-height: 1.7;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 1.25rem;
+      color: #94a3b8;
+      font-size: 0.7rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Loomforge Design Flow Architecture</h1>
+      <p class="subtitle">Requirement → scaffolded repo + reviewed design doc + Linear project</p>
+    </div>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 920 720">
+        <defs>
+          <marker id="arrow" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#94a3b8" />
+          </marker>
+          <marker id="arrow-blue" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#93b4e8" />
+          </marker>
+          <marker id="arrow-indigo" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#a5b4fc" />
+          </marker>
+          <marker id="arrow-green" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#6ee7b7" />
+          </marker>
+          <marker id="arrow-purple" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#c4b5fd" />
+          </marker>
+          <marker id="arrow-amber" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#fcd34d" />
+          </marker>
+          <marker id="arrow-rose" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+            <polygon points="0 0, 7 2.5, 0 5" fill="#fda4af" />
+          </marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#fafbfc"/>
+
+        <!-- ================================================================= -->
+        <!-- ROW 1: CALLERS                                                    -->
+        <!-- ================================================================= -->
+
+        <!-- Operator (aligned above CLI) -->
+        <rect x="120" y="20" width="160" height="50" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+        <text x="200" y="40" fill="#334155" font-size="11" font-weight="600" text-anchor="middle">Operator</text>
+        <text x="200" y="56" fill="#94a3b8" font-size="8" text-anchor="middle">requirement.md + slug</text>
+
+        <!-- OpenClaw (aligned above MCP Server) -->
+        <rect x="640" y="20" width="160" height="50" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+        <text x="720" y="40" fill="#334155" font-size="11" font-weight="600" text-anchor="middle">OpenClaw</text>
+        <text x="720" y="56" fill="#94a3b8" font-size="8" text-anchor="middle">loom_design_* MCP tools</text>
+
+        <!-- ================================================================= -->
+        <!-- DAEMON BOUNDARY                                                   -->
+        <!-- ================================================================= -->
+        <rect x="40" y="95" width="840" height="465" rx="12" fill="transparent" stroke="#e2e8f0" stroke-width="1.5" stroke-dasharray="6,4"/>
+        <text x="56" y="113" fill="#94a3b8" font-size="9" font-weight="500">loomforged</text>
+
+        <!-- ================================================================= -->
+        <!-- ROW 2: ENTRY LAYER                                                -->
+        <!-- ================================================================= -->
+
+        <!-- CLI -->
+        <rect x="120" y="125" width="160" height="48" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+        <text x="200" y="146" fill="#1e40af" font-size="10.5" font-weight="600" text-anchor="middle">CLI</text>
+        <text x="200" y="162" fill="#64748b" font-size="8" text-anchor="middle">loomforge design new | extend</text>
+
+        <!-- HTTP API -->
+        <rect x="380" y="125" width="160" height="48" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+        <text x="460" y="146" fill="#1e40af" font-size="10.5" font-weight="600" text-anchor="middle">HTTP API</text>
+        <text x="460" y="162" fill="#64748b" font-size="8" text-anchor="middle">/design/new · /design/extend</text>
+
+        <!-- MCP Server -->
+        <rect x="640" y="125" width="160" height="48" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+        <text x="720" y="146" fill="#1e40af" font-size="10.5" font-weight="600" text-anchor="middle">MCP Server</text>
+        <text x="720" y="162" fill="#64748b" font-size="8" text-anchor="middle">stdio</text>
+
+        <!-- Callers → Entry: straight down onto target boxes -->
+        <line x1="200" y1="70" x2="200" y2="123" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <line x1="720" y1="70" x2="720" y2="123" stroke="#cbd5e1" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- CLI / MCP → API: curved into shared API layer -->
+        <path d="M 280 149 Q 330 149 378 149" fill="none" stroke="#93c5fd" stroke-width="1" marker-end="url(#arrow-blue)"/>
+        <path d="M 640 149 Q 590 149 542 149" fill="none" stroke="#93c5fd" stroke-width="1" marker-end="url(#arrow-blue)"/>
+
+        <!-- ================================================================= -->
+        <!-- ROW 3: DESIGN ENGINE                                              -->
+        <!-- ================================================================= -->
+
+        <rect x="120" y="210" width="680" height="100" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.2"/>
+        <text x="460" y="233" fill="#166534" font-size="12" font-weight="700" text-anchor="middle">Design Engine</text>
+
+        <!-- State machine row -->
+        <rect x="138" y="246" width="540" height="28" rx="5" fill="#ffffff" stroke="#d1d5db" stroke-width="0.8"/>
+        <text x="408" y="264" fill="#64748b" font-size="8" text-anchor="middle">validating → scaffolding → drafting → reviewing → revising? → publishing → registering → complete</text>
+
+        <!-- Resume / redraft pill -->
+        <rect x="690" y="246" width="100" height="28" rx="5" fill="#ffffff" stroke="#d1d5db" stroke-width="0.8"/>
+        <text x="740" y="264" fill="#64748b" font-size="8" text-anchor="middle">resume · --redraft</text>
+
+        <!-- Sub-label -->
+        <text x="460" y="294" fill="#16a34a" font-size="8" text-anchor="middle" font-weight="500">durable run · resumable per (slug, feature) · max 1 revision pass</text>
+
+        <!-- API → Engine: straight down -->
+        <line x1="460" y1="173" x2="460" y2="208" stroke="#93c5fd" stroke-width="1.2" marker-end="url(#arrow-blue)"/>
+
+        <!-- ================================================================= -->
+        <!-- ROW 4: PIPELINE MODULES                                           -->
+        <!-- ================================================================= -->
+
+        <!-- Scaffolder -->
+        <rect x="55" y="365" width="135" height="60" rx="8" fill="#fefce8" stroke="#fcd34d" stroke-width="1.2"/>
+        <text x="122" y="385" fill="#713f12" font-size="10" font-weight="600" text-anchor="middle">Scaffolder</text>
+        <text x="122" y="400" fill="#64748b" font-size="8" text-anchor="middle">dir · git init · .gitignore</text>
+        <text x="122" y="412" fill="#64748b" font-size="8" text-anchor="middle">copy CLAUDE / AGENTS.md</text>
+
+        <!-- gh remote helper -->
+        <rect x="210" y="365" width="115" height="60" rx="8" fill="#fefce8" stroke="#fcd34d" stroke-width="1.2"/>
+        <text x="267" y="385" fill="#713f12" font-size="10" font-weight="600" text-anchor="middle">gh Remote</text>
+        <text x="267" y="400" fill="#64748b" font-size="8" text-anchor="middle">optional</text>
+        <text x="267" y="412" fill="#64748b" font-size="8" text-anchor="middle">gh repo create</text>
+
+        <!-- Design Builder -->
+        <rect x="345" y="365" width="135" height="60" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.2"/>
+        <text x="412" y="385" fill="#065f46" font-size="10" font-weight="600" text-anchor="middle">Design Builder</text>
+        <text x="412" y="400" fill="#64748b" font-size="8" text-anchor="middle">Codex (full-auto)</text>
+        <text x="412" y="412" fill="#64748b" font-size="8" text-anchor="middle">DESIGN_TEMPLATE.md</text>
+
+        <!-- Design Reviewer -->
+        <rect x="500" y="365" width="135" height="60" rx="8" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="1.2"/>
+        <text x="567" y="385" fill="#065f46" font-size="10" font-weight="600" text-anchor="middle">Design Reviewer</text>
+        <text x="567" y="400" fill="#64748b" font-size="8" text-anchor="middle">Claude (skip-perms)</text>
+        <text x="567" y="412" fill="#64748b" font-size="8" text-anchor="middle">pass · revise · blocked</text>
+
+        <!-- Linear Publisher -->
+        <rect x="655" y="365" width="115" height="60" rx="8" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.2"/>
+        <text x="712" y="385" fill="#3730a3" font-size="10" font-weight="600" text-anchor="middle">Linear</text>
+        <text x="712" y="397" fill="#3730a3" font-size="10" font-weight="600" text-anchor="middle">Publisher</text>
+        <text x="712" y="412" fill="#64748b" font-size="8" text-anchor="middle">project + document</text>
+
+        <!-- loom.yaml Appender -->
+        <rect x="790" y="365" width="80" height="60" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.2"/>
+        <text x="830" y="385" fill="#5b21b6" font-size="10" font-weight="600" text-anchor="middle">YAML</text>
+        <text x="830" y="397" fill="#5b21b6" font-size="10" font-weight="600" text-anchor="middle">Appender</text>
+        <text x="830" y="414" fill="#64748b" font-size="7.5" text-anchor="middle">if remote_url</text>
+
+        <!-- Engine → modules: each arrow lands on the module's top-center -->
+        <path d="M 200 310 Q 200 340 122 340 L 122 363" fill="none" stroke="#fcd34d" stroke-width="1.1" marker-end="url(#arrow-amber)"/>
+        <line x1="267" y1="310" x2="267" y2="363" stroke="#fcd34d" stroke-width="1.1" marker-end="url(#arrow-amber)"/>
+        <line x1="412" y1="310" x2="412" y2="363" stroke="#6ee7b7" stroke-width="1.1" marker-end="url(#arrow-green)"/>
+        <line x1="567" y1="310" x2="567" y2="363" stroke="#6ee7b7" stroke-width="1.1" marker-end="url(#arrow-green)"/>
+        <line x1="712" y1="310" x2="712" y2="363" stroke="#a5b4fc" stroke-width="1.1" marker-end="url(#arrow-indigo)"/>
+        <path d="M 760 310 Q 760 340 830 340 L 830 363" fill="none" stroke="#c4b5fd" stroke-width="1.1" marker-end="url(#arrow-purple)"/>
+
+        <!-- Builder ↔ Reviewer revise loop (Reviewer findings → Builder, dashed) -->
+        <line x1="500" y1="395" x2="482" y2="395" stroke="#fda4af" stroke-width="1.1" stroke-dasharray="3,3" marker-end="url(#arrow-rose)"/>
+        <text x="490" y="383" fill="#fb7185" font-size="7" text-anchor="middle">≤1 revise</text>
+
+        <!-- ================================================================= -->
+        <!-- ROW 5: STORAGE + EXTERNAL                                         -->
+        <!-- ================================================================= -->
+
+        <!-- design_runs SQLite -->
+        <rect x="55" y="490" width="135" height="50" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.2"/>
+        <text x="122" y="511" fill="#5b21b6" font-size="10" font-weight="600" text-anchor="middle">design_runs</text>
+        <text x="122" y="527" fill="#64748b" font-size="8" text-anchor="middle">SQLite · slug+feature key</text>
+
+        <!-- Target Repo -->
+        <rect x="210" y="490" width="270" height="50" rx="8" fill="#fefce8" stroke="#fcd34d" stroke-width="1.2"/>
+        <text x="345" y="510" fill="#713f12" font-size="10" font-weight="600" text-anchor="middle">Target Repo (local fs)</text>
+        <text x="345" y="525" fill="#64748b" font-size="8" text-anchor="middle">&lt;repoRoot&gt;/&lt;slug&gt;/ · docs/design/&lt;slug&gt;-design.md</text>
+        <text x="345" y="536" fill="#64748b" font-size="8" text-anchor="middle">CLAUDE.md · AGENTS.md · .gitignore</text>
+
+        <!-- GitHub -->
+        <rect x="500" y="490" width="135" height="50" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+        <text x="567" y="511" fill="#334155" font-size="11" font-weight="600" text-anchor="middle">GitHub</text>
+        <text x="567" y="527" fill="#94a3b8" font-size="8" text-anchor="middle">Remote Repo</text>
+
+        <!-- Linear -->
+        <rect x="655" y="490" width="115" height="50" rx="8" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.2"/>
+        <text x="712" y="511" fill="#334155" font-size="11" font-weight="600" text-anchor="middle">Linear</text>
+        <text x="712" y="527" fill="#94a3b8" font-size="8" text-anchor="middle">Project + Document</text>
+
+        <!-- loom.yaml -->
+        <rect x="790" y="490" width="80" height="50" rx="8" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.2"/>
+        <text x="830" y="511" fill="#5b21b6" font-size="10" font-weight="600" text-anchor="middle">loom.yaml</text>
+        <text x="830" y="527" fill="#94a3b8" font-size="7.5" text-anchor="middle">~/.loomforge/</text>
+
+        <!-- Module → storage/external arrows -->
+        <line x1="122" y1="425" x2="122" y2="488" stroke="#c4b5fd" stroke-width="1" marker-end="url(#arrow-purple)"/>
+        <text x="135" y="465" fill="#94a3b8" font-size="7">persist</text>
+
+        <line x1="412" y1="425" x2="412" y2="488" stroke="#6ee7b7" stroke-width="1.1" marker-end="url(#arrow-green)"/>
+        <text x="425" y="465" fill="#94a3b8" font-size="7">write design doc</text>
+
+        <line x1="170" y1="425" x2="220" y2="488" stroke="#fcd34d" stroke-width="1" marker-end="url(#arrow-amber)"/>
+        <text x="172" y="463" fill="#94a3b8" font-size="7">scaffold</text>
+
+        <!-- gh Remote → GitHub (curves above storage row, enters GitHub from top) -->
+        <path d="M 267 425 Q 420 460 567 488" fill="none" stroke="#cbd5e1" stroke-width="1" marker-end="url(#arrow)"/>
+
+        <!-- Linear Publisher → Linear -->
+        <line x1="712" y1="425" x2="712" y2="488" stroke="#a5b4fc" stroke-width="1.1" marker-end="url(#arrow-indigo)"/>
+        <text x="724" y="465" fill="#94a3b8" font-size="7">@linear/sdk</text>
+
+        <!-- YAML Appender → loom.yaml -->
+        <line x1="830" y1="425" x2="830" y2="488" stroke="#c4b5fd" stroke-width="1.1" marker-end="url(#arrow-purple)"/>
+
+        <!-- ================================================================= -->
+        <!-- HANDOFF LIFECYCLE (bottom annotation)                             -->
+        <!-- ================================================================= -->
+
+        <rect x="60" y="590" width="610" height="64" rx="10" fill="#ffffff" stroke="#e2e8f0" stroke-width="1"/>
+        <text x="365" y="611" fill="#334155" font-size="10" font-weight="600" text-anchor="middle">Design Lifecycle</text>
+
+        <text x="80" y="632" fill="#eab308" font-size="9" font-weight="500">Validate</text>
+        <text x="125" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="140" y="632" fill="#eab308" font-size="9" font-weight="500">Scaffold</text>
+        <text x="187" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="202" y="632" fill="#10b981" font-size="9" font-weight="500">Draft</text>
+        <text x="237" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="252" y="632" fill="#10b981" font-size="9" font-weight="500">Review</text>
+        <text x="295" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="310" y="632" fill="#f97316" font-size="9" font-weight="500">Revise?</text>
+        <text x="355" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="370" y="632" fill="#818cf8" font-size="9" font-weight="500">Publish</text>
+        <text x="415" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="430" y="632" fill="#a78bfa" font-size="9" font-weight="500">Register</text>
+        <text x="478" y="632" fill="#cbd5e1" font-size="9">→</text>
+        <text x="493" y="632" fill="#334155" font-size="9" font-weight="500">Handoff</text>
+
+        <text x="365" y="648" fill="#94a3b8" font-size="7.5" text-anchor="middle">No human gate · resumes from last incomplete step · register skipped → 'needs_remote' if no GitHub remote</text>
+
+        <!-- ================================================================= -->
+        <!-- LEGEND                                                            -->
+        <!-- ================================================================= -->
+        <rect x="690" y="590" width="180" height="120" rx="8" fill="#ffffff" stroke="#e2e8f0" stroke-width="0.8"/>
+        <text x="705" y="609" fill="#334155" font-size="9" font-weight="600">Legend</text>
+
+        <rect x="705" y="620" width="14" height="10" rx="3" fill="#eff6ff" stroke="#93c5fd" stroke-width="0.8"/>
+        <text x="725" y="628" fill="#64748b" font-size="7.5">Entry Layer (CLI/HTTP/MCP)</text>
+
+        <rect x="705" y="636" width="14" height="10" rx="3" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="0.8"/>
+        <text x="725" y="644" fill="#64748b" font-size="7.5">Engine</text>
+
+        <rect x="705" y="652" width="14" height="10" rx="3" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="0.8"/>
+        <text x="725" y="660" fill="#64748b" font-size="7.5">Runners (Codex / Claude)</text>
+
+        <rect x="705" y="668" width="14" height="10" rx="3" fill="#fefce8" stroke="#fcd34d" stroke-width="0.8"/>
+        <text x="725" y="676" fill="#64748b" font-size="7.5">Git / Filesystem</text>
+
+        <rect x="705" y="684" width="14" height="10" rx="3" fill="#eef2ff" stroke="#a5b4fc" stroke-width="0.8"/>
+        <text x="725" y="692" fill="#64748b" font-size="7.5">Linear</text>
+
+        <rect x="705" y="700" width="14" height="10" rx="3" fill="#faf5ff" stroke="#c4b5fd" stroke-width="0.8"/>
+        <text x="725" y="708" fill="#64748b" font-size="7.5">Storage / Config</text>
+      </svg>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot green"></div>
+          <h3>Pipeline Stages</h3>
+        </div>
+        <ul>
+          <li>• Validate inputs (slug pattern, requirement source)</li>
+          <li>• Scaffold dir + git init + governance files</li>
+          <li>• Optional gh repo create (if gh CLI available)</li>
+          <li>• Draft → review → at most one revise → publish</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot blue"></div>
+          <h3>Inputs &amp; Surfaces</h3>
+        </div>
+        <ul>
+          <li>• <code>loomforge design new &lt;slug&gt;</code> (CLI)</li>
+          <li>• <code>loomforge design extend &lt;slug&gt; --feature ...</code></li>
+          <li>• HTTP <code>POST /design/new</code> · <code>/design/extend</code></li>
+          <li>• MCP <code>loom_design_*</code> tools (OpenClaw)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot indigo"></div>
+          <h3>Outputs &amp; Handoff</h3>
+        </div>
+        <ul>
+          <li>• Local repo with reviewed design doc + AGENTS/CLAUDE.md</li>
+          <li>• Linear project + Linear Document</li>
+          <li>• Project entry appended to <code>~/.loomforge/loom.yaml</code></li>
+          <li>• <code>needs_remote</code> flag if no GitHub remote was created</li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="footer">Loomforge v0.1 · Design flow: requirement → scaffolded repo + reviewed design + Linear project</p>
+  </div>
+</body>
+</html>

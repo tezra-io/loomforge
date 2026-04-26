@@ -2,6 +2,13 @@ import { LinearClient } from "@linear/sdk";
 
 import type { ProjectConfig } from "../config/index.js";
 import type { IssueSnapshot, LinearIssueSummary, LinearWorkflowClient } from "../workflow/index.js";
+import type {
+  LinearAdhocClient,
+  LinearAdhocCreateIssueInput,
+  LinearAdhocIssueResult,
+  LinearLabelSummary,
+  LinearStateSummary,
+} from "./issue-create.js";
 
 export class LinearAuthError extends Error {
   constructor(message: string) {
@@ -41,7 +48,9 @@ export interface LinearDesignClient {
   updateDocument(id: string, content: string): Promise<LinearDocumentSummary>;
 }
 
-export class LinearWorkflowClientImpl implements LinearWorkflowClient, LinearDesignClient {
+export class LinearWorkflowClientImpl
+  implements LinearWorkflowClient, LinearDesignClient, LinearAdhocClient
+{
   private readonly client: LinearClient;
 
   constructor(apiKey: string) {
@@ -263,6 +272,75 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient, LinearDes
     });
   }
 
+  async findTeamIdByKey(teamKey: string): Promise<string | null> {
+    return this.safeRequest(async () => {
+      const teams = await this.client.teams({ filter: { key: { eq: teamKey } } });
+      const team = teams.nodes[0];
+      return team?.id ?? null;
+    });
+  }
+
+  async findProjectIdByName(teamId: string, name: string): Promise<string | null> {
+    return this.safeRequest(async () => {
+      const team = await this.client.team(teamId).catch(() => null);
+      if (!team) return null;
+      const projects = await team.projects({ filter: { name: { eq: name } } });
+      return projects.nodes[0]?.id ?? null;
+    });
+  }
+
+  async findLabel(teamId: string, name: string): Promise<LinearLabelSummary | null> {
+    return this.safeRequest(async () => {
+      const team = await this.client.team(teamId).catch(() => null);
+      if (!team) return null;
+      const labels = await team.labels({ filter: { name: { eq: name } } });
+      const label = labels.nodes[0];
+      return label ? { id: label.id, name: label.name } : null;
+    });
+  }
+
+  async createLabel(input: { teamId: string; name: string }): Promise<LinearLabelSummary> {
+    return this.safeRequest(async () => {
+      const payload = await this.client.createIssueLabel({
+        teamId: input.teamId,
+        name: input.name,
+      });
+      const label = await payload.issueLabel;
+      if (!label) {
+        throw new Error(`Linear createIssueLabel returned no label for "${input.name}"`);
+      }
+      return { id: label.id, name: label.name };
+    });
+  }
+
+  async findBacklogState(teamId: string, name: string): Promise<LinearStateSummary | null> {
+    return this.safeRequest(async () => {
+      const team = await this.client.team(teamId).catch(() => null);
+      if (!team) return null;
+      const states = await team.states();
+      const state = states.nodes.find((s) => s.name === name);
+      return state ? { id: state.id } : null;
+    });
+  }
+
+  async createIssue(input: LinearAdhocCreateIssueInput): Promise<LinearAdhocIssueResult> {
+    return this.safeRequest(async () => {
+      const payload = await this.client.createIssue({
+        title: input.title,
+        description: input.description,
+        teamId: input.teamId,
+        projectId: input.projectId,
+        stateId: input.stateId,
+        labelIds: input.labelIds,
+      });
+      const issue = await payload.issue;
+      if (!issue) {
+        throw new Error(`Linear createIssue returned no issue for "${input.title}"`);
+      }
+      return { identifier: issue.identifier, url: issue.url };
+    });
+  }
+
   private async resolveTeam(teamKey: string) {
     const teams = await this.client.teams({ filter: { key: { eq: teamKey } } });
     const team = teams.nodes[0];
@@ -284,7 +362,9 @@ export class LinearWorkflowClientImpl implements LinearWorkflowClient, LinearDes
   }
 }
 
-export function createMissingKeyClient(): LinearWorkflowClient & LinearDesignClient {
+export function createMissingKeyClient(): LinearWorkflowClient &
+  LinearDesignClient &
+  LinearAdhocClient {
   const err = () => {
     throw new LinearAuthError(
       "Linear API key not configured — add it to ~/.loomforge/config.yaml or set LINEAR_API_KEY",
@@ -301,6 +381,12 @@ export function createMissingKeyClient(): LinearWorkflowClient & LinearDesignCli
     findDocumentById: err,
     createDocumentOnProject: err,
     updateDocument: err,
+    findTeamIdByKey: err,
+    findProjectIdByName: err,
+    findLabel: err,
+    createLabel: err,
+    findBacklogState: err,
+    createIssue: err,
   };
 }
 

@@ -11,7 +11,11 @@ import {
 } from "../config/index.js";
 import { SqliteRunStore } from "../db/index.js";
 import { DesignEngine, SqliteDesignRunStore, type DesignEngineOptions } from "../design/index.js";
-import { LinearWorkflowClientImpl, createMissingKeyClient } from "../linear/index.js";
+import {
+  LinearWorkflowClientImpl,
+  createMissingKeyClient,
+  type LinearAdhocClient,
+} from "../linear/index.js";
 import {
   BuilderRunnerImpl,
   DesignBuilderRunner,
@@ -41,6 +45,7 @@ export interface LoomRuntime {
   designScheduler: DrainScheduler;
   store: SqliteRunStore;
   artifactStore: ArtifactStore;
+  adhocLinear: LinearAdhocClient;
   logger: Logger;
   reloadConfig(): Promise<ReloadConfigResult>;
   close(): void;
@@ -136,6 +141,7 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
     designScheduler,
     store,
     artifactStore: artifacts,
+    adhocLinear: linear,
     logger,
     reloadConfig,
     close: () => {

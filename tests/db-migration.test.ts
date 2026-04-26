@@ -207,3 +207,84 @@ describe("v1 to v2 schema migration", () => {
     store.close();
   });
 });
+
+function seedV5Schema(db: DatabaseSync): void {
+  const statements: string[] = [
+    `CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE projects (
+      slug TEXT PRIMARY KEY,
+      repo_root TEXT NOT NULL,
+      default_branch TEXT NOT NULL,
+      dev_branch TEXT NOT NULL,
+      runtime_data_root TEXT NOT NULL,
+      config_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE runs (
+      id TEXT PRIMARY KEY,
+      project_slug TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      state TEXT NOT NULL,
+      failure_reason TEXT,
+      revision_count INTEGER NOT NULL,
+      queue_position INTEGER,
+      issue_snapshot_json TEXT,
+      handoff_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_slug) REFERENCES projects(slug)
+    )`,
+  ];
+  for (const stmt of statements) {
+    db.prepare(stmt).run();
+  }
+}
+
+describe("v5 to v6 schema migration", () => {
+  it("adds runs.source with default 'linear' and backfills existing rows", () => {
+    const db = new DatabaseSync(":memory:");
+    seedV5Schema(db);
+    db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
+      5,
+      new Date().toISOString(),
+    );
+
+    db.prepare(
+      `INSERT INTO projects (slug, repo_root, default_branch, dev_branch, runtime_data_root, config_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("demo", "/repos/demo", "main", "dev", "/data", "{}", "2026-04-25T00:00:00.000Z");
+
+    db.prepare(
+      `INSERT INTO runs (id, project_slug, issue_id, state, failure_reason, revision_count, queue_position, issue_snapshot_json, handoff_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "run-1",
+      "demo",
+      "TEZ-1",
+      "queued",
+      null,
+      0,
+      1,
+      null,
+      null,
+      "2026-04-25T00:00:00.000Z",
+      "2026-04-25T00:00:00.000Z",
+    );
+
+    const store = new SqliteRunStore(db);
+
+    const cols = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === "source")).toBe(true);
+
+    const row = db.prepare("SELECT id, source FROM runs WHERE id = ?").get("run-1") as
+      | { id: string; source: string }
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.source).toBe("linear");
+
+    store.close();
+  });
+});

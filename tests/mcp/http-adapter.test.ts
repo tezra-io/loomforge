@@ -126,4 +126,33 @@ describe("HTTP adapter integration", () => {
   it("cleanupWorkspace throws for unknown project", async () => {
     await expect(adapter.cleanupWorkspace("unknown")).rejects.toThrow();
   });
+
+  it("submitAdhocRun posts to /runs/adhoc with project + prompt", async () => {
+    const captured: { url?: string; init?: RequestInit } = {};
+    const fakeFetch: typeof fetch = async (input, init) => {
+      captured.url = typeof input === "string" ? input : input.toString();
+      captured.init = init;
+      return new Response(
+        JSON.stringify({
+          runId: "run-1",
+          issueId: "TEZ-100",
+          linearUrl: "https://linear.app/x/issue/TEZ-100",
+          queuePosition: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const isolatedAdapter = createHttpAdapter({
+      baseUrl: "http://127.0.0.1:3777",
+      fetch: fakeFetch,
+    });
+    const result = (await isolatedAdapter.submitAdhocRun("loom", "Fix the typo in README")) as {
+      issueId: string;
+    };
+    expect(captured.url).toContain("/runs/adhoc");
+    expect(captured.init?.method).toBe("POST");
+    const body = JSON.parse(String(captured.init?.body ?? "{}")) as Record<string, unknown>;
+    expect(body).toEqual({ project: "loom", prompt: "Fix the typo in README" });
+    expect(result.issueId).toBe("TEZ-100");
+  });
 });

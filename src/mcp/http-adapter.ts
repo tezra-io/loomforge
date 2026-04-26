@@ -20,6 +20,7 @@ export interface LoomHttpAdapter {
   health(): Promise<unknown>;
   getQueue(): Promise<unknown>;
   submitRun(projectSlug: string, issueId: string, executionMode?: string): Promise<unknown>;
+  submitAdhocRun(project: string, prompt: string): Promise<unknown>;
   getRun(runId: string): Promise<unknown>;
   cancelRun(runId: string): Promise<unknown>;
   retryRun(runId: string): Promise<unknown>;
@@ -40,6 +41,8 @@ export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapt
     getQueue: () => requestJson(options, "GET", "/queue"),
     submitRun: (projectSlug, issueId, executionMode = "enqueue") =>
       requestJson(options, "POST", "/runs", { projectSlug, issueId, executionMode }),
+    submitAdhocRun: (project, prompt) =>
+      requestJson(options, "POST", "/runs/adhoc", { project, prompt }),
     getRun: (runId) => requestJson(options, "GET", `/runs/${encodeURIComponent(runId)}`),
     cancelRun: (runId) => requestJson(options, "POST", `/runs/${encodeURIComponent(runId)}/cancel`),
     retryRun: (runId) => requestJson(options, "POST", `/runs/${encodeURIComponent(runId)}/retry`),

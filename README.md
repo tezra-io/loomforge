@@ -18,6 +18,7 @@ project + design doc) and a **build flow** (Linear issue → code → review →
 - [Configuration](#configuration)
 - [Usage](#usage)
   - [Issue build flow](#issue-build-flow)
+  - [Ad-hoc run](#ad-hoc-run)
   - [Design flow](#design-flow)
   - [Reloading project config](#reloading-project-config)
 - [MCP Server (optional)](#mcp-server-optional)
@@ -220,6 +221,28 @@ loomforge get <runId>                   # get run state and findings
 loomforge cancel <runId>                # cancel a queued run
 loomforge retry <runId>                 # retry a failed/blocked run
 ```
+
+### Ad-hoc run
+
+When you have a small, well-scoped task and don't want to hand-author a Linear
+issue, fire it off as an ad-hoc run. Loomforge creates a `loomforge-adhoc`-labeled
+Linear issue from your prompt, then runs the normal build pipeline against it.
+The Linear ticket is the system of record — it transitions through "in progress"
+/ "done" exactly like a human-authored issue.
+
+```sh
+loomforge adhoc "Fix the typo in README" --project loom
+loomforge adhoc "Update CHANGELOG for 0.3.0" --project /absolute/path/to/repo
+```
+
+`--project` is required and accepts either a registered slug or an absolute
+repo-root path. There is no current-directory fallback. The command prints the
+run ID, Linear identifier, and queue position; track it with
+`loomforge get <runId>`.
+
+The project must have `linearTeamKey` and `linearProjectName` configured. See
+[skills/loomforge/SKILL.md](skills/loomforge/SKILL.md) for the full ad-hoc flow
+including MCP usage and error handling.
 
 ### Design flow
 

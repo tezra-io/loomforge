@@ -222,6 +222,31 @@ describe("workflow engine", () => {
     });
   });
 
+  it("defaults RunRecord.source to 'linear' when source is not provided", () => {
+    const { engine } = createEngine();
+    const result = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-1",
+      executionMode: "enqueue",
+    });
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) return;
+    expect(result.run.source).toBe("linear");
+  });
+
+  it("records RunRecord.source='adhoc' when input.source='adhoc'", () => {
+    const { engine } = createEngine();
+    const result = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-2",
+      executionMode: "enqueue",
+      source: "adhoc",
+    });
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) return;
+    expect(result.run.source).toBe("adhoc");
+  });
+
   it("blocks before build when workspace preparation reports a rebase conflict", async () => {
     const { buildContexts, engine } = createEngine({
       prepareResult: {

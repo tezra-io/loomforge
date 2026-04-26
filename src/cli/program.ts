@@ -15,11 +15,13 @@ import { runSetup, type RunSetupOptions } from "./setup.js";
 export interface CreateCliProgramOptions {
   write?: (text: string) => void;
   runSetup?: (options?: RunSetupOptions) => Promise<void> | void;
+  fetch?: typeof fetch;
 }
 
 export function createCliProgram(options: CreateCliProgramOptions = {}): Command {
   const write = options.write ?? ((text: string) => process.stdout.write(text));
   const runSetupCommand = options.runSetup ?? runSetup;
+  const fetchImpl = options.fetch;
   const program = new Command();
 
   program
@@ -97,6 +99,27 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
         }
       },
     );
+
+  program
+    .command("adhoc")
+    .description("Submit an ad-hoc prompt-driven run for a project")
+    .argument("<prompt>")
+    .requiredOption(
+      "-p, --project <slug-or-path>",
+      "registered project slug or absolute path to its repoRoot",
+    )
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (prompt: string, commandOptions: AdhocCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url, ...(fetchImpl ? { fetch: fetchImpl } : {}) },
+          "POST",
+          "/runs/adhoc",
+          { project: commandOptions.project, prompt },
+        ),
+      );
+    });
 
   program
     .command("queue")
@@ -316,6 +339,10 @@ interface UrlCommandOptions {
 
 interface SubmitCommandOptions extends UrlCommandOptions {
   mode: string;
+}
+
+interface AdhocCommandOptions extends UrlCommandOptions {
+  project: string;
 }
 
 interface DesignNewCommandOptions extends UrlCommandOptions {

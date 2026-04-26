@@ -51,6 +51,7 @@ function makeContext(project: ProjectConfig, workspace: WorkspaceSnapshot): Work
     id: "run-1",
     projectSlug: project.slug,
     issueId: "TEZ-1",
+    source: "linear",
     state: "verifying",
     failureReason: null,
     revisionCount: 0,

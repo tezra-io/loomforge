@@ -13,6 +13,12 @@ function stubAdapter(overrides: Partial<LoomHttpAdapter> = {}): LoomHttpAdapter 
       run: { id: "run-1", state: "queued" },
       queuePosition: 1,
     }),
+    submitAdhocRun: async () => ({
+      runId: "run-1",
+      issueId: "TEZ-100",
+      linearUrl: "https://linear.app/x/issue/TEZ-100",
+      queuePosition: 1,
+    }),
     getRun: async () => ({ run: { id: "run-1", state: "shipped" } }),
     cancelRun: async () => ({ run: { id: "run-1", state: "cancelled" } }),
     retryRun: async () => ({ run: { id: "run-1", state: "queued" } }),
@@ -91,6 +97,7 @@ describe("MCP server tools", () => {
       "loom_health",
       "loom_retry_design_run",
       "loom_retry_run",
+      "loom_submit_adhoc",
       "loom_submit_project",
       "loom_submit_run",
     ]);
@@ -164,6 +171,33 @@ describe("MCP server tools", () => {
     });
     const parsed = parseToolText(result) as { run: { state: string } };
     expect(parsed.run.state).toBe("queued");
+  });
+
+  it("loom_submit_adhoc delegates to adapter.submitAdhocRun", async () => {
+    let captured: { project: string; prompt: string } | null = null;
+    await cleanup();
+    await setup(
+      stubAdapter({
+        submitAdhocRun: async (project, prompt) => {
+          captured = { project, prompt };
+          return {
+            runId: "run-1",
+            issueId: "TEZ-100",
+            linearUrl: "https://linear.app/x/issue/TEZ-100",
+            queuePosition: 1,
+          };
+        },
+      }),
+    );
+
+    const result = await client.callTool({
+      name: "loom_submit_adhoc",
+      arguments: { project: "loom", prompt: "Fix the typo in README" },
+    });
+    const parsed = parseToolText(result) as { issueId: string };
+    expect(result.isError).toBeUndefined();
+    expect(parsed.issueId).toBe("TEZ-100");
+    expect(captured).toEqual({ project: "loom", prompt: "Fix the typo in README" });
   });
 
   it("loom_cleanup_workspace cleans workspace", async () => {

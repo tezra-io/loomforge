@@ -18,6 +18,7 @@ import type {
   RunEvent,
   RunHandoff,
   RunRecord,
+  RunSource,
   RunState,
   SubmitProjectResult,
   SubmitRunInput,
@@ -65,7 +66,7 @@ export class WorkflowEngine {
     }
 
     this.options.store?.saveProject(project);
-    const run = this.createRun(input.projectSlug, input.issueId);
+    const run = this.createRun(input.projectSlug, input.issueId, input.source ?? "linear");
     this.queue.push(run.id);
     this.refreshQueuePositions();
     this.persistRun(run);
@@ -92,7 +93,7 @@ export class WorkflowEngine {
       }
 
       this.options.store?.saveProject(project);
-      const run = this.createRun(projectSlug, issue.identifier);
+      const run = this.createRun(projectSlug, issue.identifier, "linear");
       this.queue.push(run.id);
       this.refreshQueuePositions();
       this.persistRun(run);
@@ -208,7 +209,7 @@ export class WorkflowEngine {
     run.queuePosition = null;
     this.persistRun(run);
     this.activeRunId = run.id;
-    this.log.info({ runId: run.id, issueId: run.issueId }, "executing run");
+    this.log.info({ runId: run.id, issueId: run.issueId, source: run.source }, "executing run");
 
     try {
       await this.executeRun(run);
@@ -511,12 +512,13 @@ export class WorkflowEngine {
     }
   }
 
-  private createRun(projectSlug: string, issueId: string): RunRecord {
+  private createRun(projectSlug: string, issueId: string, source: RunSource): RunRecord {
     const now = this.now();
     const run: RunRecord = {
       id: this.newId(),
       projectSlug,
       issueId,
+      source,
       state: "queued",
       failureReason: null,
       revisionCount: 0,
@@ -663,6 +665,10 @@ export class WorkflowEngine {
 
   setRegistry(registry: WorkflowEngineOptions["registry"]): void {
     this.options.registry = registry;
+  }
+
+  getRegistry(): WorkflowEngineOptions["registry"] {
+    return this.options.registry;
   }
 
   private projectForSlug(projectSlug: string): ProjectConfig {

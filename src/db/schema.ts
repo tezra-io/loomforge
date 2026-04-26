@@ -1,4 +1,4 @@
-export const schemaVersion = 5;
+export const schemaVersion = 6;
 
 export interface SchemaMigration {
   version: number;
@@ -98,6 +98,13 @@ ALTER TABLE design_runs ADD COLUMN revision_applied INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE design_runs ADD COLUMN registered_at INTEGER;
 `,
   },
+  {
+    version: 6,
+    skipIfColumnExists: { table: "runs", column: "source" },
+    sql: `
+ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'linear';
+`,
+  },
 ];
 
 export const sqliteSchema = `
@@ -128,6 +135,7 @@ CREATE TABLE IF NOT EXISTS runs (
   queue_position INTEGER,
   issue_snapshot_json TEXT,
   handoff_json TEXT,
+  source TEXT NOT NULL DEFAULT 'linear',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (project_slug) REFERENCES projects(slug)

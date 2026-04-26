@@ -39,6 +39,7 @@ projects:
       id: "run-1",
       projectSlug: "test",
       issueId: "TEZ-1",
+      source: "linear",
       state: "reviewing",
       failureReason: null,
       revisionCount: 0,
