@@ -1,8 +1,8 @@
 # @tezra-io/loomforge
 
-## 0.3.0
+## 0.2.5
 
-### Minor Changes
+### Patch Changes
 
 - Add ad-hoc prompt-driven runs. `loomforge adhoc "<prompt>" --project <slug-or-path>` (or `POST /runs/adhoc`, or the `loom_submit_adhoc` MCP tool) creates a `loomforge-adhoc`-labeled Linear issue from a free-text prompt, then enqueues a normal build run against it. The Linear issue is the system of record and transitions through "in progress" / "done" via the existing status sync. `--project` is required; there is no current-directory fallback.
 
