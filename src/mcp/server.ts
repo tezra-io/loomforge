@@ -35,6 +35,21 @@ export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
   );
 
   mcp.tool(
+    "loom_submit_adhoc",
+    "Submit an ad-hoc prompt-driven run. Loomforge creates a Linear issue from the prompt under the project's Linear project (label: loomforge-adhoc), then enqueues a normal build run.",
+    {
+      project: z
+        .string()
+        .min(1)
+        .describe("Registered project slug or absolute path to its repoRoot"),
+      prompt: z.string().min(1).max(8000).describe("Free-text task description (≤ 8000 chars)"),
+    },
+    async ({ project, prompt }) => {
+      return safeCall(() => adapter.submitAdhocRun(project, prompt));
+    },
+  );
+
+  mcp.tool(
     "loom_get_run",
     "Get current state of a run by ID",
     { runId: z.string().min(1).describe("Run ID") },
