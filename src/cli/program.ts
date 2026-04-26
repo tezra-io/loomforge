@@ -101,7 +101,7 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
     );
 
   program
-    .command("run")
+    .command("adhoc")
     .description("Submit an ad-hoc prompt-driven run for a project")
     .argument("<prompt>")
     .requiredOption(
@@ -109,7 +109,7 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
       "registered project slug or absolute path to its repoRoot",
     )
     .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
-    .action(async (prompt: string, commandOptions: RunCommandOptions) => {
+    .action(async (prompt: string, commandOptions: AdhocCommandOptions) => {
       writeJson(
         write,
         await requestJson(
@@ -341,7 +341,7 @@ interface SubmitCommandOptions extends UrlCommandOptions {
   mode: string;
 }
 
-interface RunCommandOptions extends UrlCommandOptions {
+interface AdhocCommandOptions extends UrlCommandOptions {
   project: string;
 }
 

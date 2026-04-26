@@ -231,8 +231,8 @@ The Linear ticket is the system of record — it transitions through "in progres
 / "done" exactly like a human-authored issue.
 
 ```sh
-loomforge run "Fix the typo in README" --project loom
-loomforge run "Update CHANGELOG for 0.3.0" --project /absolute/path/to/repo
+loomforge adhoc "Fix the typo in README" --project loom
+loomforge adhoc "Update CHANGELOG for 0.3.0" --project /absolute/path/to/repo
 ```
 
 `--project` is required and accepts either a registered slug or an absolute

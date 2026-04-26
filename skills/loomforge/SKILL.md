@@ -106,8 +106,8 @@ Use ad-hoc when you have a small, well-scoped task and don't want to hand-author
 ### CLI
 
 ```bash
-loomforge run "Fix the typo in README" --project loom
-loomforge run "Update the CHANGELOG for 0.3.0" --project /Users/me/code/loom
+loomforge adhoc "Fix the typo in README" --project loom
+loomforge adhoc "Update the CHANGELOG for 0.3.0" --project /Users/me/code/loom
 ```
 
 `--project` is **required** and accepts either a registered slug or an absolute path to the repo root. There is no CWD fallback — Loomforge is typically invoked by OpenClaw whose working directory is OpenClaw's repo, not the target project. Falling back to CWD would silently target the wrong repo.

@@ -22,7 +22,7 @@ describe("createCliProgram", () => {
     expect(writes.join("")).toContain("setup output");
   });
 
-  it("loomforge run posts to /runs/adhoc with project + prompt and prints the payload", async () => {
+  it("loomforge adhoc posts to /runs/adhoc with project + prompt and prints the payload", async () => {
     const captured: { url?: string; init?: RequestInit } = {};
     const fakeFetch: typeof fetch = async (input, init) => {
       captured.url = typeof input === "string" ? input : input.toString();
@@ -46,7 +46,7 @@ describe("createCliProgram", () => {
       fetch: fakeFetch,
     });
 
-    await program.parseAsync(["run", "Fix the typo in README", "--project", "loom"], {
+    await program.parseAsync(["adhoc", "Fix the typo in README", "--project", "loom"], {
       from: "user",
     });
 
@@ -57,7 +57,7 @@ describe("createCliProgram", () => {
     expect(written.join("")).toContain("TEZ-100");
   });
 
-  it("loomforge run requires --project (no CWD fallback)", async () => {
+  it("loomforge adhoc requires --project (no CWD fallback)", async () => {
     const program = createCliProgram({
       write: () => {},
       fetch: (async () => new Response("{}")) as typeof fetch,
@@ -65,6 +65,6 @@ describe("createCliProgram", () => {
     program.exitOverride();
     program.commands.forEach((c) => c.exitOverride());
 
-    await expect(program.parseAsync(["run", "x"], { from: "user" })).rejects.toThrow(/project/i);
+    await expect(program.parseAsync(["adhoc", "x"], { from: "user" })).rejects.toThrow(/project/i);
   });
 });
