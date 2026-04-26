@@ -7,6 +7,8 @@ import type { DrainScheduler } from "../app/drain-scheduler.js";
 import type { SqliteRunStore } from "../db/index.js";
 import type { DesignEngine } from "../design/index.js";
 import { buildHandoff } from "../design/index.js";
+import type { LinearAdhocClient } from "../linear/index.js";
+import { submitAdhocRun } from "../workflow/index.js";
 import type { WorkflowEngine } from "../workflow/index.js";
 
 const submitRunSchema = z
@@ -20,6 +22,13 @@ const submitRunSchema = z
 const submitProjectSchema = z
   .object({
     projectSlug: z.string().trim().min(1),
+  })
+  .strict();
+
+const submitAdhocSchema = z
+  .object({
+    project: z.string().trim().min(1),
+    prompt: z.string().min(1).max(8000),
   })
   .strict();
 
@@ -38,6 +47,7 @@ const runIdParamSchema = z
 export interface CreateApiServerOptions {
   engine: WorkflowEngine;
   scheduler: DrainScheduler;
+  adhocLinear?: LinearAdhocClient;
   store?: SqliteRunStore;
   artifactStore?: ArtifactStore;
   designEngine?: DesignEngine;
@@ -125,6 +135,50 @@ export function createApiServer(options: CreateApiServerOptions) {
       return reply.code(202).send(response);
     } catch (error) {
       return reply.code(400).send({ error: errorMessage(error) });
+    }
+  });
+
+  server.post("/runs/adhoc", async (request, reply) => {
+    if (!options.adhocLinear) {
+      return reply.code(501).send({ error: "adhoc_unavailable" });
+    }
+
+    const parsed = submitAdhocSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "validation_failed", details: parsed.error.flatten() });
+    }
+
+    const result = await submitAdhocRun(
+      {
+        registry: options.engine.getRegistry(),
+        linear: options.adhocLinear,
+        engine: options.engine,
+        scheduler: options.scheduler,
+        now: () => new Date(),
+      },
+      parsed.data,
+    );
+
+    if (result.ok) {
+      return reply.code(200).send({
+        runId: result.runId,
+        issueId: result.issueId,
+        linearUrl: result.linearUrl,
+        queuePosition: result.queuePosition,
+      });
+    }
+
+    switch (result.error) {
+      case "validation_failed":
+        return reply.code(400).send(result);
+      case "project_not_found":
+        return reply.code(404).send(result);
+      case "linear_not_configured":
+        return reply.code(409).send(result);
+      case "linear_create_failed":
+        return reply.code(502).send(result);
+      case "submit_after_create_failed":
+        return reply.code(500).send(result);
     }
   });
 

@@ -667,6 +667,10 @@ export class WorkflowEngine {
     this.options.registry = registry;
   }
 
+  getRegistry(): WorkflowEngineOptions["registry"] {
+    return this.options.registry;
+  }
+
   private projectForSlug(projectSlug: string): ProjectConfig {
     const project = this.options.registry.bySlug.get(projectSlug);
     if (!project) {
