@@ -60,6 +60,15 @@ pnpm run format
 - Do not confuse config work with Loomforge's product surface. Config is only step 1; the core product is the workflow engine that owns runs, queue draining, Linear sync, worktree prep, build, verification, review, revision loops, push, and handoff.
 - After touching `src/config/`, the next implementation step should usually be `src/workflow/`, `src/db/`, `src/worktrees/`, `src/runners/`, `src/linear/`, `src/api/`, or `src/mcp/`. Do not add more config knobs unless an engine/module contract already needs them.
 
+## Data layout
+There is **only one** Loomforge data location per setup — `~/.loomforge/`. There is no separate `.loomforge-data/` concept.
+- `~/.loomforge/config.yaml` — global config (Linear API key, design defaults)
+- `~/.loomforge/loom.yaml` — project registry
+- `~/.loomforge/data/` — runtime data (SQLite, artifacts, runs, design-artifacts). This is the default `runtime.dataRoot`.
+- `~/.loomforge/logs/` — daemon logs
+
+The `.loomforge-data/` directory at the repo root of `/Users/sujshe/projects/loom` exists **only** because the local `loom.yaml` overrides `runtime.dataRoot: .loomforge-data` for dev — so testing Loom against itself doesn't pollute the real `~/.loomforge/data/`. New artifacts (build, design, planning) all go under `<dataRoot>/artifacts/...`. Do not introduce a second top-level data directory.
+
 ---
 _Every mistake is a rule waiting to be written._
 

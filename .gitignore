@@ -7,3 +7,4 @@ dist/
 loom.yaml
 .loomforge-data/
 .husky/
+.playwright-mcp/
