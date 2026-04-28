@@ -1,5 +1,14 @@
 # @tezra-io/loomforge
 
+## 0.2.6
+
+### Patch Changes
+
+- Add a public `SPEC.md` behavior contract and include it in the published
+  package. Clarify that verification commands are builder self-checks, the build
+  flow allows one review-driven revision pass, Codex/Claude CLIs own runner auth,
+  and Loomforge pushes only the configured `devBranch`.
+
 ## 0.2.5
 
 ### Patch Changes
