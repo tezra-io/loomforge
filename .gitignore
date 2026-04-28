@@ -8,3 +8,7 @@ loom.yaml
 .loomforge-data/
 .husky/
 .playwright-mcp/
+
+# Local research/design scratch notes
+docs/design/
+docs/superpowers/

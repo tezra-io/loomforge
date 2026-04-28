@@ -156,10 +156,10 @@ projects:
   - slug: my-project
     repoRoot: /path/to/repo
     defaultBranch: main
-    linearTeamKey: TEZ              # required for project-level submission
-    linearProjectName: My Project   # Linear project name — filters issues
-    builder: codex                  # "codex" or "claude" (default: claude)
-    reviewer: claude                # "codex" or "claude" (default: claude)
+    linearTeamKey: TEZ # required for project-level submission
+    linearProjectName: My Project # Linear project name — filters issues
+    builder: codex # "codex" or "claude" (default: claude)
+    reviewer: claude # "codex" or "claude" (default: claude)
     verification:
       commands:
         - name: test
@@ -167,6 +167,10 @@ projects:
         - name: lint
           command: pnpm run lint
 ```
+
+`verification.commands` are passed to the builder as required self-checks before
+handoff. Loomforge does not run a separate verification phase between build and
+review.
 
 ### 3. (Optional) Enable the design flow
 
@@ -184,11 +188,11 @@ present.
 
 ```yaml
 design:
-  repoRoot: /path/to/workspaces    # parent dir where new project repos are scaffolded
-  defaultBranch: main              # branch to open the design-doc PR against
-  devBranch: dev                   # long-lived branch the design doc is pushed to (default: dev)
-  linearTeamKey: TEZ               # Linear team key that owns new design projects
-  githubOrg: tezra-io              # optional — create new repos under this org instead of your user
+  repoRoot: /path/to/workspaces # parent dir where new project repos are scaffolded
+  defaultBranch: main # branch to open the design-doc PR against
+  devBranch: dev # long-lived branch the design doc is pushed to (default: dev)
+  linearTeamKey: TEZ # Linear team key that owns new design projects
+  githubOrg: tezra-io # optional — create new repos under this org instead of your user
 ```
 
 `devBranch` must differ from `defaultBranch`. `githubOrg`, when set, is used
@@ -400,23 +404,26 @@ loomforge design extend my-project --feature billing \
 
 ## Architecture
 
+See [SPEC.md](SPEC.md) for Loomforge's public behavior contract. This section
+maps that contract onto the current implementation.
+
 ![Loomforge Architecture](docs/architecture.png)
 
 ### Module Map
 
-| Module | Path | Responsibility |
-|--------|------|---------------|
-| API | `src/api/` | Local HTTP endpoints |
-| App | `src/app/` | Daemon bootstrap, lifecycle, service composition |
-| CLI | `src/cli/` | Operator-facing wrapper over the API |
-| Config | `src/config/` | Project registry, YAML loading, zod validation |
-| DB | `src/db/` | SQLite schema, migrations, event log |
-| Linear | `src/linear/` | Issue fetching and status sync |
-| MCP | `src/mcp/` | MCP server adapter (optional) |
-| Workflow | `src/workflow/` | Run state machine, queue drain, retry/recovery |
-| Runners | `src/runners/` | Configurable builder + reviewer (Codex or Claude) |
-| Worktrees | `src/worktrees/` | Dev branch worktree, rebase, cleanup |
-| Artifacts | `src/artifacts/` | Prompt/log/result persistence |
+| Module    | Path             | Responsibility                                    |
+| --------- | ---------------- | ------------------------------------------------- |
+| API       | `src/api/`       | Local HTTP endpoints                              |
+| App       | `src/app/`       | Daemon bootstrap, lifecycle, service composition  |
+| CLI       | `src/cli/`       | Operator-facing wrapper over the API              |
+| Config    | `src/config/`    | Project registry, YAML loading, zod validation    |
+| DB        | `src/db/`        | SQLite schema, migrations, event log              |
+| Linear    | `src/linear/`    | Issue fetching and status sync                    |
+| MCP       | `src/mcp/`       | MCP server adapter (optional)                     |
+| Workflow  | `src/workflow/`  | Run state machine, queue drain, retry/recovery    |
+| Runners   | `src/runners/`   | Configurable builder + reviewer (Codex or Claude) |
+| Worktrees | `src/worktrees/` | Dev branch worktree, rebase, cleanup              |
+| Artifacts | `src/artifacts/` | Prompt/log/result persistence                     |
 
 ### Stack
 
@@ -451,6 +458,15 @@ with steps to reproduce, expected vs. actual behavior, and your Node/OS version.
 ---
 
 ## Security
+
+Loomforge assumes a trusted single-user local machine. It runs registered local
+repos through the Codex CLI and Claude Code CLI, and those tools own their own
+authentication. Loomforge does **not** store OpenAI or Anthropic API keys.
+
+Loomforge only reads a Linear API key for Linear issue/project operations, either
+from `~/.loomforge/config.yaml` or `LINEAR_API_KEY`. Build runs execute in the
+configured project workspace, push only the configured `devBranch`, and never
+merge into the default branch automatically.
 
 If you discover a security vulnerability, please report it privately via
 [GitHub Security Advisories](https://github.com/tezra-io/loomforge/security/advisories/new)
