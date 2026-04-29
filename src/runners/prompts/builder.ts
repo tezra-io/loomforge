@@ -104,17 +104,3 @@ export function buildPrompt(context: WorkflowStepContext): string {
 
   return sections.join("\n");
 }
-
-export function pushPrompt(branchName: string, defaultBranch: string): string {
-  return [
-    "Push the current branch to the remote origin.",
-    "",
-    `Run: git push origin ${branchName}`,
-    `NEVER push to ${defaultBranch}, main, or master. Only push to ${branchName}.`,
-    "Do not force push. If the push fails, report the error.",
-    "",
-    "After pushing, report:",
-    `COMMIT: <sha>`,
-    "PUSH: <success or failure>",
-  ].join("\n");
-}

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
@@ -12,6 +12,8 @@ let tmpDir: string;
 let repoDir: string;
 let artifactDir: string;
 let binDir: string;
+let originalPath: string | undefined;
+let originalBuilderOutput: string | undefined;
 
 function createContext(overrides: Partial<WorkflowStepContext> = {}): WorkflowStepContext {
   const project =
@@ -86,7 +88,21 @@ async function writeFakeBinary(name: string, script: string): Promise<void> {
   await chmod(path, 0o755);
 }
 
+function createPushContext(overrides: Partial<PushContext> = {}): PushContext {
+  const context = createContext();
+  return {
+    run: context.run,
+    project: context.project,
+    issue: context.issue,
+    workspace: context.workspace,
+    attempt: context.attempt,
+    ...overrides,
+  };
+}
+
 beforeEach(async () => {
+  originalPath = process.env.PATH;
+  originalBuilderOutput = process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
   tmpDir = await mkdtemp(join(tmpdir(), "loom-codex-"));
   repoDir = join(tmpDir, "repo");
   artifactDir = join(tmpDir, "artifacts");
@@ -101,9 +117,16 @@ beforeEach(async () => {
   await execa("git", ["-C", repoDir, "checkout", "-b", "dev"]);
 
   process.env.PATH = `${binDir}:${process.env.PATH}`;
+  delete process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
 });
 
 afterEach(async () => {
+  process.env.PATH = originalPath;
+  if (originalBuilderOutput === undefined) {
+    delete process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
+  } else {
+    process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = originalBuilderOutput;
+  }
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -197,62 +220,297 @@ describe("BuilderRunnerImpl", () => {
     expect(captured).toContain("Codex builder for TEZ-1");
     expect(captured).toContain("## Gate");
   });
+
+  it("keeps the legacy codex command when structured output is disabled", async () => {
+    const argsLog = join(tmpDir, "codex-args.txt");
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}" && cd "${repoDir}" && echo "change" > file.txt && git add file.txt && git commit -m "feat: legacy" >/dev/null && echo "CHANGED_FILES:" && echo "- file.txt" && echo "SUMMARY:" && echo "done" && echo "VERIFICATION:" && echo "- echo ok: pass"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("success");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("exec");
+    expect(args).not.toContain("--json");
+    expect(args).not.toContain("--output-schema");
+    expect(args).not.toContain("--output-last-message");
+  });
+
+  it("runs codex with schema flags and writes structured artifacts when enabled", async () => {
+    process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "codex-args.txt");
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}"
+schema=""
+final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      schema="$1"
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+if [ ! -f "$schema" ]; then
+  echo "schema missing" >&2
+  exit 17
+fi
+cat > /dev/null
+cd "${repoDir}" && echo "actual" > actual.txt && git add actual.txt && git commit -m "feat: structured" >/dev/null
+cat > "$final" <<'JSON'
+{"outcome":"success","changed_files":["reported-only.txt"],"summary":"structured","verification":[{"command":"pnpm test","outcome":"pass","summary":"ok"}],"blocker":""}
+JSON
+echo '{"type":"thread.started","thread_id":"t"}'
+echo '{"type":"turn.started"}'
+echo "structured stderr" >&2`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+    const logDir = join(artifactDir, "run-1", "attempt-1");
+
+    expect(result.outcome).toBe("success");
+    expect(result.changedFiles).toEqual(["actual.txt"]);
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("--json");
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("--output-last-message");
+    await expect(readFile(join(logDir, "builder-events.jsonl"), "utf8")).resolves.toContain(
+      "thread.started",
+    );
+    await expect(readFile(join(logDir, "builder-stderr.log"), "utf8")).resolves.toContain(
+      "structured stderr",
+    );
+    await expect(readFile(join(logDir, "builder-final.txt"), "utf8")).resolves.toContain(
+      "reported-only.txt",
+    );
+    await expect(readFile(join(logDir, "builder-output.schema.json"), "utf8")).resolves.toContain(
+      '"blocker"',
+    );
+    const summary = JSON.parse(await readFile(join(logDir, "builder-summary.json"), "utf8"));
+    expect(summary).toMatchObject({
+      outputMode: "json-schema",
+      parse: {
+        ok: true,
+        source: "final",
+        outcome: "success",
+      },
+    });
+    expect(summary.schema.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("falls back to the captured final assistant event when builder-final is missing", async () => {
+    process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "codex",
+      `while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+  esac
+  shift
+done
+cat > /dev/null
+cd "${repoDir}" && echo "event" > event.txt && git add event.txt && git commit -m "feat: event" >/dev/null
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"outcome\\":\\"success\\",\\"changed_files\\":[\\"event.txt\\"],\\"summary\\":\\"from event\\",\\"verification\\":[{\\"command\\":\\"pnpm test\\",\\"outcome\\":\\"pass\\",\\"summary\\":\\"ok\\"}],\\"blocker\\":\\"\\"}"}}'`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+    const summaryPath = join(artifactDir, "run-1", "attempt-1", "builder-summary.json");
+    const summary = JSON.parse(await readFile(summaryPath, "utf8"));
+
+    expect(result.outcome).toBe("success");
+    expect(summary.parse.source).toBe("events");
+  });
+
+  it("uses builder-final text, not JSONL events, in the corrective retry prompt", async () => {
+    process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = "json-schema";
+    const countFile = join(tmpDir, "codex-count.txt");
+    const retryPromptLog = join(tmpDir, "retry-prompt.txt");
+    await writeFakeBinary(
+      "codex",
+      `count=0
+if [ -f "${countFile}" ]; then
+  count=$(cat "${countFile}")
+fi
+count=$((count + 1))
+printf '%s' "$count" > "${countFile}"
+final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+prompt=$(cat)
+if [ "$count" = "1" ]; then
+  printf '%s' "not json from builder-final" > "$final"
+  echo '{"type":"item.completed","item":{"type":"agent_message","text":"EVENT_JSONL_NOISE"}}'
+  exit 0
+fi
+printf '%s' "$prompt" > "${retryPromptLog}"
+cd "${repoDir}" && echo "retry" > retry.txt && git add retry.txt && git commit -m "feat: retry" >/dev/null
+cat > "$final" <<'JSON'
+{"outcome":"success","changed_files":["retry.txt"],"summary":"retry ok","verification":[{"command":"pnpm test","outcome":"pass","summary":"ok"}],"blocker":""}
+JSON
+echo '{"type":"thread.started","thread_id":"retry"}'`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+    const retryPrompt = await readFile(retryPromptLog, "utf8");
+
+    expect(result.outcome).toBe("success");
+    expect(retryPrompt).toContain("not json from builder-final");
+    expect(retryPrompt).not.toContain("EVENT_JSONL_NOISE");
+  });
+
+  it("returns runner_error after invalid structured output on retry", async () => {
+    process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "codex",
+      `final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+cat > /dev/null
+printf '%s' "still not json" > "$final"
+echo '{"type":"turn.completed"}'`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.failureReason).toBe("runner_error");
+    expect(result.summary).toContain("invalid structured output");
+  });
 });
 
 describe("BuilderRunnerImpl push", () => {
-  it("returns success when push exits cleanly and branch is synced", async () => {
-    const bareRemote = join(tmpDir, "remote.git");
-    await execa("git", ["init", "--bare", bareRemote]);
-    await execa("git", ["-C", repoDir, "remote", "add", "origin", bareRemote]);
-    await execa("git", ["-C", repoDir, "push", "-u", "origin", "dev"]);
+  it("directly pushes the configured dev branch", async () => {
+    const argsLog = join(tmpDir, "git-push-args.txt");
+    await writeFakeBinary(
+      "git",
+      `if [ "$1" = "push" ]; then
+  printf '%s\\n' "$@" > "${argsLog}"
+  echo "pushed"
+  exit 0
+fi
+if [ "$1" = "rev-list" ]; then
+  echo "0 0"
+  exit 0
+fi
+echo "unexpected git command: $*" >&2
+exit 2`,
+    );
 
-    await writeFakeBinary("codex", "echo 'pushed'");
-
+    const base = createContext();
+    const project = { ...base.project, devBranch: "integration" };
+    const workspace = { ...base.workspace, branchName: project.devBranch };
     const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
-    const pushCtx: PushContext = {
-      run: createContext().run,
-      project: createContext().project,
-      issue: createContext().issue,
-      workspace: createContext().workspace,
-      attempt: createContext().attempt,
-    };
+    const pushCtx = createPushContext({ project, workspace });
     const result = await runner.push(pushCtx);
 
     expect(result.outcome).toBe("success");
+    expect(await readFile(argsLog, "utf8")).toBe("push\norigin\nintegration\n");
   });
 
   it("returns failed when push exits non-zero", async () => {
-    await writeFakeBinary("codex", "echo 'push error' >&2; exit 1");
+    await writeFakeBinary(
+      "git",
+      `if [ "$1" = "push" ]; then
+  echo "push error" >&2
+  exit 1
+fi
+exit 2`,
+    );
 
     const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
-    const pushCtx: PushContext = {
-      run: createContext().run,
-      project: createContext().project,
-      issue: createContext().issue,
-      workspace: createContext().workspace,
-      attempt: createContext().attempt,
-    };
-    const result = await runner.push(pushCtx);
+    const result = await runner.push(createPushContext());
 
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("push_failed");
   });
 
   it("returns blocked with runner_auth_missing when push exits with auth error", async () => {
-    await writeFakeBinary("codex", "echo 'Authentication failed: not logged in' >&2; exit 1");
+    await writeFakeBinary(
+      "git",
+      `if [ "$1" = "push" ]; then
+  echo "Authentication failed: not logged in" >&2
+  exit 1
+fi
+exit 2`,
+    );
 
     const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
-    const pushCtx: PushContext = {
-      run: createContext().run,
-      project: createContext().project,
-      issue: createContext().issue,
-      workspace: createContext().workspace,
-      attempt: createContext().attempt,
-    };
-    const result = await runner.push(pushCtx);
+    const result = await runner.push(createPushContext());
 
     expect(result.outcome).toBe("blocked");
     expect(result.failureReason).toBe("runner_auth_missing");
     expect(result.summary).toContain("authentication failed");
+  });
+
+  it.each(["main", "master", "release"])("refuses protected branch %s", async (branchName) => {
+    const context = createContext();
+    const project = { ...context.project, defaultBranch: "release" };
+    const workspace = { ...context.workspace, branchName };
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.push(createPushContext({ project, workspace }));
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.failureReason).toBe("push_failed");
+    expect(result.summary).toContain("Refusing to push");
+  });
+
+  it("fails when remote sync verification reports divergence", async () => {
+    await writeFakeBinary(
+      "git",
+      `if [ "$1" = "push" ]; then
+  echo "pushed"
+  exit 0
+fi
+if [ "$1" = "rev-list" ]; then
+  echo "1 0"
+  exit 0
+fi
+exit 2`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.push(createPushContext());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.failureReason).toBe("push_failed");
+    expect(result.summary).toContain("ahead");
   });
 });
