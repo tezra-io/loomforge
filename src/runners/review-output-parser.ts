@@ -41,6 +41,10 @@ function tryParseReview(text: string): ReviewPayload | null {
     return null;
   }
 
+  return readReviewPayload(value);
+}
+
+export function readReviewPayload(value: unknown): ReviewPayload | null {
   if (!isReviewShape(value)) return null;
   return {
     outcome: value.outcome,
