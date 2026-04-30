@@ -199,7 +199,21 @@ describe("BuilderRunnerImpl", () => {
 
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("runner_error");
-    expect(result.summary).toContain("no changes");
+    expect(result.summary).toContain("claimed changes but produced no diff");
+  });
+
+  it("returns no_changes when codex reports FAILED_NO_CHANGES with a clean tree", async () => {
+    await writeFakeBinary(
+      "codex",
+      `echo "FAILED_NO_CHANGES: dev already has the work; nothing to do"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("no_changes");
+    expect(result.commitSha).toBeNull();
+    expect(result.summary).toContain("dev already has the work");
   });
 
   it("returns failed after two consecutive no-ops", async () => {

@@ -167,6 +167,15 @@ export class BuilderRunnerImpl implements BuilderRunner {
       }
     }
 
+    if (textContractDeclaresNoChanges(result.stdout)) {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.stdoutLogPath,
+        extractFailedNoChangesSummary(result.stdout),
+      );
+    }
+
     return this.finishBuildFromGit(context, headBefore, result.stdoutLogPath);
   }
 
@@ -217,6 +226,15 @@ export class BuilderRunnerImpl implements BuilderRunner {
           failureReason: "runner_error",
         };
       }
+    }
+
+    if (parsed.parse.ok && parsed.parse.payload.outcome === "failed_no_changes") {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.stdoutLogPath,
+        noChangesSummary(parsed.parse.payload),
+      );
     }
 
     const summary = parsed.parse.ok
@@ -283,6 +301,15 @@ export class BuilderRunnerImpl implements BuilderRunner {
           failureReason: "runner_error",
         };
       }
+    }
+
+    if (parsed.parse.payload.outcome === "failed_no_changes") {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.eventsLogPath,
+        noChangesSummary(parsed.parse.payload),
+      );
     }
 
     return this.finishBuildFromGit(
@@ -452,7 +479,7 @@ export class BuilderRunnerImpl implements BuilderRunner {
     context: WorkflowStepContext,
     headBefore: string | null,
     rawLogPath: string,
-    noChangesMessage = "Builder completed but produced no changes",
+    noChangesMessage = "Builder claimed changes but produced no diff",
   ): Promise<BuilderResult> {
     const { run, workspace } = context;
     let headAfter = await this.getHead(workspace.path);
@@ -843,6 +870,57 @@ function noChangesSummary(payload: BuilderOutputPayload): string {
   if (payload.blocker.trim().length > 0) return payload.blocker;
   if (payload.summary.trim().length > 0) return payload.summary;
   return "Builder reported failed_no_changes and produced no changes";
+}
+
+function textContractDeclaresNoChanges(stdout: string): boolean {
+  return stdout.includes("FAILED_NO_CHANGES:");
+}
+
+function extractFailedNoChangesSummary(stdout: string): string {
+  const marker = "FAILED_NO_CHANGES:";
+  const start = stdout.indexOf(marker);
+  if (start < 0) return "Builder reported FAILED_NO_CHANGES";
+  const after = stdout.slice(start + marker.length).trim();
+  if (after.length === 0) return "Builder reported FAILED_NO_CHANGES";
+  const firstParagraph = after.split(/\n\s*\n/)[0]?.trim() ?? after;
+  return firstParagraph.length > 0 ? firstParagraph : "Builder reported FAILED_NO_CHANGES";
+}
+
+async function finishWithoutChanges(
+  context: WorkflowStepContext,
+  headBefore: string | null,
+  rawLogPath: string,
+  summary: string,
+): Promise<BuilderResult> {
+  const headAfter = await getHeadSafe(context.workspace.path);
+  if (headAfter && headAfter !== headBefore) {
+    // Builder said no changes but git moved — treat as success and let git be the truth.
+    return {
+      outcome: "success",
+      summary: `Builder reported no changes but committed ${headAfter}`,
+      changedFiles: [],
+      commitSha: headAfter,
+      rawLogPath,
+    };
+  }
+  return {
+    outcome: "no_changes",
+    summary,
+    changedFiles: [],
+    commitSha: null,
+    rawLogPath,
+  };
+}
+
+async function getHeadSafe(cwd: string): Promise<string | null> {
+  try {
+    const result = await execa("git", ["rev-parse", "HEAD"], { cwd, reject: false });
+    if (result.exitCode !== 0) return null;
+    const head = result.stdout.trim();
+    return head.length > 0 ? head : null;
+  } catch {
+    return null;
+  }
 }
 
 function isTimedOutError(error: unknown): boolean {

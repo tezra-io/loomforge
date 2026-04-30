@@ -701,4 +701,58 @@ describe("project completion dedupe by issue", () => {
     expect(status.shipped).toEqual(["TEZ-1"]);
     expect(status.failed).toEqual([]);
   });
+
+  it("lands no_changes builds in already_complete and counts them in completion", async () => {
+    const completions: ProjectCompletionResult[] = [];
+
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      newId: createIds(),
+      now: createClock(),
+      onProjectComplete: (result) => completions.push(result),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => [],
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => ({
+          outcome: "no_changes",
+          summary: "already on dev",
+          changedFiles: [],
+          commitSha: null,
+          rawLogPath: "/tmp/builder.log",
+        }),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const submitted = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-1",
+      executionMode: "enqueue",
+    });
+    if (!submitted.accepted) throw new Error("submit not accepted");
+    await engine.drainQueue();
+
+    const run = engine.getRun(submitted.run.id);
+    expect(run.state).toBe("already_complete");
+    expect(run.failureReason).toBeNull();
+
+    const final = completions.at(-1);
+    expect(final?.shipped).toEqual([]);
+    expect(final?.alreadyComplete).toEqual(["TEZ-1"]);
+    expect(final?.failed).toEqual([]);
+    expect(final?.pullRequestUrl).toBeNull();
+
+    const status = engine.getProjectStatus("loom");
+    expect(status.shipped).toEqual([]);
+    expect(status.alreadyComplete).toEqual(["TEZ-1"]);
+    expect(status.done).toBe(true);
+  });
 });
