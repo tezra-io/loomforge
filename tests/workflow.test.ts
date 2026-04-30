@@ -7,6 +7,7 @@ import type {
   BuilderResult,
   LinearIssueSummary,
   PrepareWorkspaceResult,
+  ProjectCompletionResult,
   ReviewResult,
   WorkflowRunStore,
   WorkflowStepContext,
@@ -633,5 +634,125 @@ projects:
     const status = engine.getProjectStatus("kayak");
     expect(status.done).toBe(false);
     expect(status.shipped).toEqual([]);
+  });
+});
+
+describe("project completion dedupe by issue", () => {
+  it("treats a re-submitted run that ships as the canonical outcome", async () => {
+    const completions: ProjectCompletionResult[] = [];
+    let pushCount = 0;
+
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      newId: createIds(),
+      now: createClock(),
+      onProjectComplete: (result) => completions.push(result),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => [],
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => builderSuccess("sha"),
+        push: async () => {
+          pushCount += 1;
+          if (pushCount === 1) {
+            return {
+              outcome: "failed",
+              summary: "push rejected",
+              rawLogPath: "/tmp/push.log",
+              failureReason: "push_failed",
+            };
+          }
+          return { outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" };
+        },
+      },
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const first = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-1",
+      executionMode: "enqueue",
+    });
+    if (!first.accepted) throw new Error("first submit not accepted");
+    await engine.drainQueue();
+    expect(engine.getRun(first.run.id).state).toBe("failed");
+
+    const second = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-1",
+      executionMode: "enqueue",
+    });
+    if (!second.accepted) throw new Error("second submit not accepted");
+    await engine.drainQueue();
+    expect(engine.getRun(second.run.id).state).toBe("shipped");
+
+    const final = completions.at(-1);
+    expect(final).toBeDefined();
+    expect(final?.shipped).toEqual(["TEZ-1"]);
+    expect(final?.failed).toEqual([]);
+
+    const status = engine.getProjectStatus("loom");
+    expect(status.shipped).toEqual(["TEZ-1"]);
+    expect(status.failed).toEqual([]);
+  });
+
+  it("lands no_changes builds in already_complete and counts them in completion", async () => {
+    const completions: ProjectCompletionResult[] = [];
+
+    const engine = new WorkflowEngine({
+      registry: createRegistry(),
+      newId: createIds(),
+      now: createClock(),
+      onProjectComplete: (result) => completions.push(result),
+      linear: {
+        fetchIssue: async () => issue,
+        listProjectIssues: async () => [],
+        updateIssueStatus: async () => {},
+      },
+      worktrees: {
+        prepareWorkspace: async () => ({ outcome: "success", workspace }),
+        cleanupWorkspace: async () => ({ outcome: "success", summary: "cleaned" }),
+      },
+      builder: {
+        build: async () => ({
+          outcome: "no_changes",
+          summary: "already on dev",
+          changedFiles: [],
+          commitSha: null,
+          rawLogPath: "/tmp/builder.log",
+        }),
+        push: async () => ({ outcome: "success", summary: "pushed", rawLogPath: "/tmp/push.log" }),
+      },
+      reviewer: { review: async () => reviewPass() },
+    });
+
+    const submitted = engine.submitRun({
+      projectSlug: "loom",
+      issueId: "TEZ-1",
+      executionMode: "enqueue",
+    });
+    if (!submitted.accepted) throw new Error("submit not accepted");
+    await engine.drainQueue();
+
+    const run = engine.getRun(submitted.run.id);
+    expect(run.state).toBe("already_complete");
+    expect(run.failureReason).toBeNull();
+
+    const final = completions.at(-1);
+    expect(final?.shipped).toEqual([]);
+    expect(final?.alreadyComplete).toEqual(["TEZ-1"]);
+    expect(final?.failed).toEqual([]);
+    expect(final?.pullRequestUrl).toBeNull();
+
+    const status = engine.getProjectStatus("loom");
+    expect(status.shipped).toEqual([]);
+    expect(status.alreadyComplete).toEqual(["TEZ-1"]);
+    expect(status.done).toBe(true);
   });
 });

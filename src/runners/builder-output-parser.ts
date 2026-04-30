@@ -68,6 +68,13 @@ export function builderOutputSchemaHash(): string {
   return createHash("sha256").update(builderOutputSchemaText()).digest("hex");
 }
 
+export function hasBuilderTextContract(text: string): boolean {
+  if (text.includes("FAILED_NO_CHANGES:")) return true;
+  return (
+    text.includes("CHANGED_FILES:") && text.includes("SUMMARY:") && text.includes("VERIFICATION:")
+  );
+}
+
 export function parseBuilderOutputText(text: string): BuilderOutputParseResult {
   const candidates = extractJsonCandidates(text);
 

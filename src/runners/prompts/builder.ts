@@ -84,7 +84,8 @@ export function buildPrompt(context: WorkflowStepContext): string {
   sections.push(
     "## Output",
     "",
-    "End with exactly one of:",
+    "Pick the block by `git status`, not intent. Empty `git status --short` →",
+    "FAILED_NO_CHANGES, even if the issue's work is already on the branch.",
     "",
     "CHANGED_FILES:",
     "- <path>",
@@ -99,7 +100,7 @@ export function buildPrompt(context: WorkflowStepContext): string {
     "",
     "or:",
     "",
-    "FAILED_NO_CHANGES: <exact blocker>",
+    "FAILED_NO_CHANGES: <one-line reason — already-satisfied or specific blocker>",
   );
 
   return sections.join("\n");

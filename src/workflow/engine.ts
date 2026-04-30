@@ -127,15 +127,18 @@ export class WorkflowEngine {
   getProjectStatus(projectSlug: string): ProjectCompletionResult & { done: boolean } {
     this.projectForSlug(projectSlug);
     const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
+    const canonical = latestRunPerIssue(projectRuns);
 
     const shipped: string[] = [];
+    const alreadyComplete: string[] = [];
     const failed: string[] = [];
     const blocked: string[] = [];
     const cancelled: string[] = [];
     const inProgress: string[] = [];
 
-    for (const r of projectRuns) {
+    for (const r of canonical) {
       if (r.state === "shipped") shipped.push(r.issueId);
+      else if (r.state === "already_complete") alreadyComplete.push(r.issueId);
       else if (r.state === "failed") failed.push(r.issueId);
       else if (r.state === "blocked") blocked.push(r.issueId);
       else if (r.state === "cancelled") cancelled.push(r.issueId);
@@ -143,9 +146,10 @@ export class WorkflowEngine {
     }
 
     return {
-      done: inProgress.length === 0 && projectRuns.length > 0,
+      done: inProgress.length === 0 && canonical.length > 0,
       projectSlug,
       shipped,
+      alreadyComplete,
       failed,
       blocked,
       cancelled,
@@ -336,6 +340,12 @@ export class WorkflowEngine {
     attempt.builderResult = build;
     this.touchAttempt(attempt);
 
+    if (build.outcome === "no_changes") {
+      await this.transitionAndSync(run, project, issue, "already_complete", {
+        details: { summary: build.summary },
+      });
+      return false;
+    }
     if (build.outcome !== "success") {
       await this.finishBuilderFailure(run, project, issue, build);
       return false;
@@ -607,18 +617,21 @@ export class WorkflowEngine {
 
     const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
     if (projectRuns.length === 0) return;
+    const canonical = latestRunPerIssue(projectRuns);
 
     const shipped: string[] = [];
+    const alreadyComplete: string[] = [];
     const shippedIssues: ShippedIssue[] = [];
     const failed: string[] = [];
     const blocked: string[] = [];
     const cancelled: string[] = [];
 
-    for (const r of projectRuns) {
+    for (const r of canonical) {
       if (r.state === "shipped") {
         shipped.push(r.issueId);
         shippedIssues.push({ id: r.issueId, title: r.issueSnapshot?.title ?? null });
-      } else if (r.state === "failed") failed.push(r.issueId);
+      } else if (r.state === "already_complete") alreadyComplete.push(r.issueId);
+      else if (r.state === "failed") failed.push(r.issueId);
       else if (r.state === "blocked") blocked.push(r.issueId);
       else if (r.state === "cancelled") cancelled.push(r.issueId);
     }
@@ -645,6 +658,7 @@ export class WorkflowEngine {
     const result: ProjectCompletionResult = {
       projectSlug,
       shipped,
+      alreadyComplete,
       failed,
       blocked,
       cancelled,
@@ -652,7 +666,13 @@ export class WorkflowEngine {
     };
 
     this.log.info(
-      { projectSlug, shipped: shipped.length, failed: failed.length, blocked: blocked.length },
+      {
+        projectSlug,
+        shipped: shipped.length,
+        alreadyComplete: alreadyComplete.length,
+        failed: failed.length,
+        blocked: blocked.length,
+      },
       "project complete",
     );
 
@@ -777,7 +797,24 @@ export class WorkflowEngine {
 }
 
 export function isTerminalState(state: RunState): boolean {
-  return state === "shipped" || state === "blocked" || state === "failed" || state === "cancelled";
+  return (
+    state === "shipped" ||
+    state === "already_complete" ||
+    state === "blocked" ||
+    state === "failed" ||
+    state === "cancelled"
+  );
+}
+
+function latestRunPerIssue(runs: RunRecord[]): RunRecord[] {
+  const byIssue = new Map<string, RunRecord>();
+  for (const run of runs) {
+    const existing = byIssue.get(run.issueId);
+    if (!existing || run.updatedAt >= existing.updatedAt) {
+      byIssue.set(run.issueId, run);
+    }
+  }
+  return [...byIssue.values()];
 }
 
 function linearStatusForState(project: ProjectConfig, state: RunState): string | null {
@@ -787,7 +824,7 @@ function linearStatusForState(project: ProjectConfig, state: RunState): string |
   if (state === "reviewing") {
     return project.linearStatuses.inReview;
   }
-  if (state === "shipped") {
+  if (state === "shipped" || state === "already_complete") {
     return project.linearStatuses.done;
   }
   if (state === "blocked" || state === "failed") {

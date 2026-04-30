@@ -14,6 +14,7 @@ let artifactDir: string;
 let binDir: string;
 let originalPath: string | undefined;
 let originalBuilderOutput: string | undefined;
+let originalClaudeBuilderOutput: string | undefined;
 
 function createContext(overrides: Partial<WorkflowStepContext> = {}): WorkflowStepContext {
   const project =
@@ -103,6 +104,7 @@ function createPushContext(overrides: Partial<PushContext> = {}): PushContext {
 beforeEach(async () => {
   originalPath = process.env.PATH;
   originalBuilderOutput = process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
+  originalClaudeBuilderOutput = process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT;
   tmpDir = await mkdtemp(join(tmpdir(), "loom-codex-"));
   repoDir = join(tmpDir, "repo");
   artifactDir = join(tmpDir, "artifacts");
@@ -118,6 +120,7 @@ beforeEach(async () => {
 
   process.env.PATH = `${binDir}:${process.env.PATH}`;
   delete process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
+  delete process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT;
 });
 
 afterEach(async () => {
@@ -126,6 +129,11 @@ afterEach(async () => {
     delete process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT;
   } else {
     process.env.LOOMFORGE_CODEX_BUILDER_OUTPUT = originalBuilderOutput;
+  }
+  if (originalClaudeBuilderOutput === undefined) {
+    delete process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT;
+  } else {
+    process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT = originalClaudeBuilderOutput;
   }
   await rm(tmpDir, { recursive: true, force: true });
 });
@@ -191,7 +199,21 @@ describe("BuilderRunnerImpl", () => {
 
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("runner_error");
-    expect(result.summary).toContain("no changes");
+    expect(result.summary).toContain("claimed changes but produced no diff");
+  });
+
+  it("returns no_changes when codex reports FAILED_NO_CHANGES with a clean tree", async () => {
+    await writeFakeBinary(
+      "codex",
+      `echo "FAILED_NO_CHANGES: dev already has the work; nothing to do"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("no_changes");
+    expect(result.commitSha).toBeNull();
+    expect(result.summary).toContain("dev already has the work");
   });
 
   it("returns failed after two consecutive no-ops", async () => {
@@ -512,5 +534,138 @@ exit 2`,
     expect(result.outcome).toBe("failed");
     expect(result.failureReason).toBe("push_failed");
     expect(result.summary).toContain("ahead");
+  });
+});
+
+describe("BuilderRunnerImpl structured Claude builder", () => {
+  function createClaudeContext(): WorkflowStepContext {
+    const ctx = createContext();
+    ctx.project.builder = "claude";
+    return ctx;
+  }
+
+  it("keeps the legacy claude command when the env flag is disabled", async () => {
+    const argsLog = join(tmpDir, "claude-args.txt");
+    await writeFakeBinary(
+      "claude",
+      `printf '%s\\n' "$@" > "${argsLog}"
+cat > /dev/null
+cd "${repoDir}" && echo "legacy" > legacy.txt && git add legacy.txt && git commit -m "feat: legacy" >/dev/null
+echo "CHANGED_FILES:"
+echo "- legacy.txt"
+echo "SUMMARY:"
+echo "done"
+echo "VERIFICATION:"
+echo "- echo ok: pass"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.build(createClaudeContext());
+
+    expect(result.outcome).toBe("success");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("-p");
+    expect(args).not.toContain("--json-schema");
+    expect(args).not.toContain("--output-format");
+  });
+
+  it("runs claude with --json-schema and writes structured artifacts when enabled", async () => {
+    process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "claude-args.txt");
+    await writeFakeBinary(
+      "claude",
+      `printf '%s\\n' "$@" > "${argsLog}"
+cat > /dev/null
+cd "${repoDir}" && echo "actual" > actual.txt && git add actual.txt && git commit -m "feat: structured" >/dev/null
+cat <<'JSON'
+{"type":"result","subtype":"success","is_error":false,"result":"done","structured_output":{"outcome":"success","changed_files":["reported-only.txt"],"summary":"structured ok","verification":[{"command":"pnpm test","outcome":"pass","summary":"ok"}],"blocker":""}}
+JSON
+echo "structured stderr" >&2`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.build(createClaudeContext());
+    const logDir = join(artifactDir, "run-1", "attempt-1");
+
+    expect(result.outcome).toBe("success");
+    expect(result.changedFiles).toEqual(["actual.txt"]);
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("-p");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+    expect(args).toContain("--json-schema");
+    expect(args).toContain('"changed_files"');
+    await expect(readFile(join(logDir, "builder-stdout.log"), "utf8")).resolves.toContain(
+      "structured_output",
+    );
+    await expect(readFile(join(logDir, "builder-stderr.log"), "utf8")).resolves.toContain(
+      "structured stderr",
+    );
+    await expect(readFile(join(logDir, "builder-structured.json"), "utf8")).resolves.toContain(
+      "reported-only.txt",
+    );
+    const metadata = JSON.parse(await readFile(join(logDir, "builder-metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({
+      outputMode: "json-schema",
+      parse: { ok: true, source: "structured_output", outcome: "success" },
+    });
+  });
+
+  it("falls back to the text contract when the wrapper JSON cannot be parsed", async () => {
+    process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "claude",
+      `cat > /dev/null
+cd "${repoDir}" && echo "fallback" > fallback.txt && git add fallback.txt && git commit -m "feat: fallback" >/dev/null
+echo "wrapper parse failed"
+echo "CHANGED_FILES:"
+echo "- fallback.txt"
+echo "SUMMARY:"
+echo "fallback summary"
+echo "VERIFICATION:"
+echo "- echo ok: pass"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.build(createClaudeContext());
+
+    expect(result.outcome).toBe("success");
+    expect(result.changedFiles).toEqual(["fallback.txt"]);
+  });
+
+  it("triggers retry when wrapper has is_error and no structured payload, then runner_error", async () => {
+    process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "claude",
+      `cat > /dev/null
+cat <<'JSON'
+{"type":"result","subtype":"error_max_turns","is_error":true,"result":"max turns reached"}
+JSON`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.build(createClaudeContext());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.failureReason).toBe("runner_error");
+    expect(result.summary).toContain("invalid structured output");
+  });
+
+  it("uses the structured Claude command only when the resolved tool is claude", async () => {
+    process.env.LOOMFORGE_CLAUDE_BUILDER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "codex-args.txt");
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}" && cat > /dev/null && cd "${repoDir}" && echo "codex" > codex.txt && git add codex.txt && git commit -m "feat: codex" >/dev/null && echo "CHANGED_FILES:" && echo "- codex.txt" && echo "SUMMARY:" && echo "done" && echo "VERIFICATION:" && echo "- echo ok: pass"`,
+    );
+
+    const runner = new BuilderRunnerImpl({ artifactDir, tool: "codex" });
+    const result = await runner.build(createContext());
+
+    expect(result.outcome).toBe("success");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("exec");
+    expect(args).not.toContain("--json-schema");
+    expect(args).not.toContain("--output-format");
   });
 });

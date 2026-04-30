@@ -2,6 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
+import type { Logger } from "pino";
 
 import type {
   BuilderResult,
@@ -14,12 +15,18 @@ import {
   builderOutputSchemaHash,
   builderOutputSchemaText,
   extractCodexFinalAssistantText,
+  hasBuilderTextContract,
   parseBuilderOutputText,
   type BuilderOutputPayload,
   type BuilderOutputParseResult,
 } from "./builder-output-parser.js";
+import { claudeBuilderCommand, useStructuredClaudeBuilder } from "./claude-builder-command.js";
+import {
+  parseClaudeBuilderJsonOutput,
+  type ClaudeBuilderParseOutcome,
+} from "./claude-builder-output-parser.js";
 import { childProcessEnv } from "./path-env.js";
-import { runProcess, isRunnerAuthError } from "./process-runner.js";
+import { runProcess, isRunnerAuthError, type ProcessRunnerResult } from "./process-runner.js";
 import { buildPrompt } from "./prompts/builder.js";
 
 export type AgentTool = "claude" | "codex";
@@ -27,6 +34,7 @@ export type AgentTool = "claude" | "codex";
 export interface BuilderRunnerOptions {
   artifactDir: string;
   tool: AgentTool;
+  logger?: Logger;
 }
 
 const NOOP_RETRY_PROMPT =
@@ -60,10 +68,12 @@ interface StructuredParseOutcome {
 export class BuilderRunnerImpl implements BuilderRunner {
   private readonly artifactDir: string;
   private readonly defaultTool: AgentTool;
+  private readonly logger: Logger | null;
 
   constructor(options: BuilderRunnerOptions) {
     this.artifactDir = options.artifactDir;
     this.defaultTool = options.tool;
+    this.logger = options.logger ?? null;
   }
 
   async build(context: WorkflowStepContext): Promise<BuilderResult> {
@@ -73,10 +83,24 @@ export class BuilderRunnerImpl implements BuilderRunner {
     const prompt = buildPrompt(context);
     const headBefore = await this.getHead(workspace.path);
 
-    if (useStructuredCodexBuilder(tool)) {
+    const structuredCodex = useStructuredCodexBuilder(tool);
+    const structuredClaude = useStructuredClaudeBuilder(tool);
+    const mode = structuredCodex || structuredClaude ? "structured" : "legacy";
+    this.logger?.info({ runId: run.id, attemptId: attempt.id, tool, mode }, "starting builder");
+
+    if (structuredCodex) {
       return this.buildStructuredCodex(
         context,
         withStructuredOutputInstructions(prompt),
+        headBefore,
+        logDir,
+      );
+    }
+
+    if (structuredClaude) {
+      return this.buildStructuredClaude(
+        context,
+        withStructuredClaudeBuilderInstructions(prompt),
         headBefore,
         logDir,
       );
@@ -109,7 +133,7 @@ export class BuilderRunnerImpl implements BuilderRunner {
       return this.exitFailure(result.exitCode, result.stderr, result.stderrLogPath);
     }
 
-    if (!hasStructuredOutput(result.stdout)) {
+    if (!hasBuilderTextContract(result.stdout)) {
       const retryPrompt =
         prompt +
         "\n\n---\n\n" +
@@ -131,7 +155,7 @@ export class BuilderRunnerImpl implements BuilderRunner {
       if (result.exitCode !== 0) {
         return this.exitFailure(result.exitCode, result.stderr, result.stderrLogPath);
       }
-      if (!hasStructuredOutput(result.stdout)) {
+      if (!hasBuilderTextContract(result.stdout)) {
         return {
           outcome: "failed",
           summary: "Builder produced no structured output after corrective retry",
@@ -143,7 +167,91 @@ export class BuilderRunnerImpl implements BuilderRunner {
       }
     }
 
+    if (textContractDeclaresNoChanges(result.stdout)) {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.stdoutLogPath,
+        extractFailedNoChangesSummary(result.stdout),
+      );
+    }
+
     return this.finishBuildFromGit(context, headBefore, result.stdoutLogPath);
+  }
+
+  private async buildStructuredClaude(
+    context: WorkflowStepContext,
+    prompt: string,
+    headBefore: string | null,
+    logDir: string,
+  ): Promise<BuilderResult> {
+    const { project, workspace } = context;
+    let result = await this.runStructuredClaude(
+      prompt,
+      workspace.path,
+      project.timeouts.builderMs,
+      logDir,
+      "builder",
+    );
+
+    if (result.timedOut) return this.timedOut(project.timeouts.builderMs, result.stdoutLogPath);
+    if (result.exitCode !== 0) {
+      return this.exitFailure(result.exitCode, result.stderr, result.stderrLogPath);
+    }
+
+    let parsed = await writeClaudeBuilderArtifacts(result);
+    if (!isUsableClaudeBuilderParse(parsed)) {
+      const retryPrompt = claudeStructuredRetryPrompt(prompt, result.stdout);
+      result = await this.runStructuredClaude(
+        retryPrompt,
+        workspace.path,
+        project.timeouts.builderMs,
+        logDir,
+        "builder-retry",
+      );
+
+      if (result.timedOut) return this.timedOut(project.timeouts.builderMs, result.stdoutLogPath);
+      if (result.exitCode !== 0) {
+        return this.exitFailure(result.exitCode, result.stderr, result.stderrLogPath);
+      }
+
+      parsed = await writeClaudeBuilderArtifacts(result);
+      if (!isUsableClaudeBuilderParse(parsed)) {
+        return {
+          outcome: "failed",
+          summary: "Builder produced invalid structured output after corrective retry",
+          changedFiles: [],
+          commitSha: null,
+          rawLogPath: result.stdoutLogPath,
+          failureReason: "runner_error",
+        };
+      }
+    }
+
+    if (parsed.parse.ok && parsed.parse.payload.outcome === "failed_no_changes") {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.stdoutLogPath,
+        noChangesSummary(parsed.parse.payload),
+      );
+    }
+
+    const summary = parsed.parse.ok
+      ? noChangesSummary(parsed.parse.payload)
+      : "Builder completed but produced no changes";
+    return this.finishBuildFromGit(context, headBefore, result.stdoutLogPath, summary);
+  }
+
+  private async runStructuredClaude(
+    prompt: string,
+    cwd: string,
+    timeoutMs: number,
+    artifactDir: string,
+    label: string,
+  ): Promise<ProcessRunnerResult> {
+    const { command, args } = claudeBuilderCommand();
+    return runProcess({ command, args, cwd, stdin: prompt, timeoutMs, artifactDir, label });
   }
 
   private async buildStructuredCodex(
@@ -193,6 +301,15 @@ export class BuilderRunnerImpl implements BuilderRunner {
           failureReason: "runner_error",
         };
       }
+    }
+
+    if (parsed.parse.payload.outcome === "failed_no_changes") {
+      return await finishWithoutChanges(
+        context,
+        headBefore,
+        result.eventsLogPath,
+        noChangesSummary(parsed.parse.payload),
+      );
     }
 
     return this.finishBuildFromGit(
@@ -362,7 +479,7 @@ export class BuilderRunnerImpl implements BuilderRunner {
     context: WorkflowStepContext,
     headBefore: string | null,
     rawLogPath: string,
-    noChangesMessage = "Builder completed but produced no changes",
+    noChangesMessage = "Builder claimed changes but produced no diff",
   ): Promise<BuilderResult> {
     const { run, workspace } = context;
     let headAfter = await this.getHead(workspace.path);
@@ -520,15 +637,6 @@ export function agentCommand(tool: AgentTool): { command: string; args: string[]
   return { command: "claude", args: ["-p", "--dangerously-skip-permissions"] };
 }
 
-function hasStructuredOutput(stdout: string): boolean {
-  if (stdout.includes("FAILED_NO_CHANGES:")) return true;
-  return (
-    stdout.includes("CHANGED_FILES:") &&
-    stdout.includes("SUMMARY:") &&
-    stdout.includes("VERIFICATION:")
-  );
-}
-
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength) + "…";
@@ -656,6 +764,105 @@ function normalizedParse(parse: BuilderOutputParseResult, source: "final" | "eve
   };
 }
 
+function withStructuredClaudeBuilderInstructions(prompt: string): string {
+  return [
+    prompt,
+    "",
+    "## Structured Output Mode",
+    "",
+    "This run uses Claude --json-schema. The final assistant message must be JSON matching the supplied schema.",
+    'Use outcome "success" after completing and committing the requested change.',
+    'Use outcome "failed_no_changes" only when blocked without changes.',
+    'Set blocker to an empty string unless outcome is "failed_no_changes".',
+    "The changed_files field is required, but Loomforge verifies committed files with git.",
+  ].join("\n");
+}
+
+function claudeStructuredRetryPrompt(prompt: string, previousStdout: string): string {
+  const previous = previousStdout.length > 0 ? previousStdout : "(no previous output)";
+  return [
+    prompt,
+    "",
+    "---",
+    "",
+    STRUCTURED_RETRY_PROMPT,
+    "",
+    "Your previous output was:",
+    truncate(previous, 2000),
+  ].join("\n");
+}
+
+function isUsableClaudeBuilderParse(parsed: ClaudeBuilderParseOutcome): boolean {
+  return parsed.parse.ok || parsed.textContractPresent;
+}
+
+async function writeClaudeBuilderArtifacts(
+  result: ProcessRunnerResult,
+): Promise<ClaudeBuilderParseOutcome> {
+  const structuredPath = result.stdoutLogPath.replace(/-stdout\.log$/, "-structured.json");
+  const metadataPath = result.stdoutLogPath.replace(/-stdout\.log$/, "-metadata.json");
+  const parsed = parseClaudeBuilderJsonOutput(result.stdout);
+
+  await Promise.all([
+    writeFile(structuredPath, jsonText(parsed.structuredOutput), "utf8"),
+    writeFile(
+      metadataPath,
+      claudeBuilderMetadataText(result, parsed, structuredPath, metadataPath),
+      "utf8",
+    ),
+  ]);
+
+  return parsed;
+}
+
+function claudeBuilderMetadataText(
+  result: ProcessRunnerResult,
+  parsed: ClaudeBuilderParseOutcome,
+  structuredPath: string,
+  metadataPath: string,
+): string {
+  const metadata = {
+    outputMode: "json-schema",
+    artifacts: {
+      stdout: result.stdoutLogPath,
+      stderr: result.stderrLogPath,
+      structured: structuredPath,
+      metadata: metadataPath,
+    },
+    process: {
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+    },
+    wrapper: parsed.wrapper,
+    parse: normalizedClaudeBuilderParse(parsed),
+  };
+  return JSON.stringify(metadata, null, 2) + "\n";
+}
+
+function normalizedClaudeBuilderParse(parsed: ClaudeBuilderParseOutcome) {
+  if (parsed.parse.ok) {
+    return {
+      ok: true,
+      source: parsed.source,
+      outcome: parsed.parse.payload.outcome,
+      changed_files: parsed.parse.payload.changed_files,
+      summary: parsed.parse.payload.summary,
+      verification: parsed.parse.payload.verification,
+      blocker: parsed.parse.payload.blocker,
+    };
+  }
+  return {
+    ok: false,
+    source: parsed.source,
+    reason: parsed.parse.reason,
+    textContractPresent: parsed.textContractPresent,
+  };
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2) + "\n";
+}
+
 function noChangesSummary(payload: BuilderOutputPayload): string {
   if (payload.outcome !== "failed_no_changes") {
     return "Builder completed but produced no changes";
@@ -663,6 +870,57 @@ function noChangesSummary(payload: BuilderOutputPayload): string {
   if (payload.blocker.trim().length > 0) return payload.blocker;
   if (payload.summary.trim().length > 0) return payload.summary;
   return "Builder reported failed_no_changes and produced no changes";
+}
+
+function textContractDeclaresNoChanges(stdout: string): boolean {
+  return stdout.includes("FAILED_NO_CHANGES:");
+}
+
+function extractFailedNoChangesSummary(stdout: string): string {
+  const marker = "FAILED_NO_CHANGES:";
+  const start = stdout.indexOf(marker);
+  if (start < 0) return "Builder reported FAILED_NO_CHANGES";
+  const after = stdout.slice(start + marker.length).trim();
+  if (after.length === 0) return "Builder reported FAILED_NO_CHANGES";
+  const firstParagraph = after.split(/\n\s*\n/)[0]?.trim() ?? after;
+  return firstParagraph.length > 0 ? firstParagraph : "Builder reported FAILED_NO_CHANGES";
+}
+
+async function finishWithoutChanges(
+  context: WorkflowStepContext,
+  headBefore: string | null,
+  rawLogPath: string,
+  summary: string,
+): Promise<BuilderResult> {
+  const headAfter = await getHeadSafe(context.workspace.path);
+  if (headAfter && headAfter !== headBefore) {
+    // Builder said no changes but git moved — treat as success and let git be the truth.
+    return {
+      outcome: "success",
+      summary: `Builder reported no changes but committed ${headAfter}`,
+      changedFiles: [],
+      commitSha: headAfter,
+      rawLogPath,
+    };
+  }
+  return {
+    outcome: "no_changes",
+    summary,
+    changedFiles: [],
+    commitSha: null,
+    rawLogPath,
+  };
+}
+
+async function getHeadSafe(cwd: string): Promise<string | null> {
+  try {
+    const result = await execa("git", ["rev-parse", "HEAD"], { cwd, reject: false });
+    if (result.exitCode !== 0) return null;
+    const head = result.stdout.trim();
+    return head.length > 0 ? head : null;
+  } catch {
+    return null;
+  }
 }
 
 function isTimedOutError(error: unknown): boolean {

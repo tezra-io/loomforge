@@ -13,6 +13,7 @@ export type RunState =
   | "revising"
   | "ready_for_ship"
   | "shipped"
+  | "already_complete"
   | "blocked"
   | "failed"
   | "cancelled";
@@ -58,7 +59,7 @@ export interface WorkspaceSnapshot {
 }
 
 export interface BuilderResult {
-  outcome: "success" | "failed" | "blocked";
+  outcome: "success" | "no_changes" | "failed" | "blocked";
   summary: string;
   changedFiles: string[];
   commitSha: string | null;
@@ -288,6 +289,7 @@ export interface WorkflowRunStore {
 export interface ProjectCompletionResult {
   projectSlug: string;
   shipped: string[];
+  alreadyComplete: string[];
   failed: string[];
   blocked: string[];
   cancelled: string[];
