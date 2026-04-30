@@ -96,6 +96,7 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
         {
           projectSlug: result.projectSlug,
           shipped: result.shipped,
+          alreadyComplete: result.alreadyComplete,
           failed: result.failed,
           blocked: result.blocked,
           pullRequestUrl: result.pullRequestUrl,
