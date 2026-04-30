@@ -14,6 +14,7 @@ let artifactDir: string;
 let binDir: string;
 let originalPath: string | undefined;
 let originalReviewerOutput: string | undefined;
+let originalCodexReviewerOutput: string | undefined;
 
 function createContext(overrides: Partial<WorkflowStepContext> = {}): WorkflowStepContext {
   const project =
@@ -90,6 +91,7 @@ async function writeFakeBinary(name: string, script: string): Promise<void> {
 beforeEach(async () => {
   originalPath = process.env.PATH;
   originalReviewerOutput = process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
+  originalCodexReviewerOutput = process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT;
   tmpDir = await mkdtemp(join(tmpdir(), "loom-claude-"));
   repoDir = join(tmpDir, "repo");
   artifactDir = join(tmpDir, "artifacts");
@@ -105,6 +107,7 @@ beforeEach(async () => {
 
   process.env.PATH = `${binDir}:${process.env.PATH}`;
   delete process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
+  delete process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT;
 });
 
 afterEach(async () => {
@@ -113,6 +116,11 @@ afterEach(async () => {
     delete process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
   } else {
     process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = originalReviewerOutput;
+  }
+  if (originalCodexReviewerOutput === undefined) {
+    delete process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT;
+  } else {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = originalCodexReviewerOutput;
   }
   await rm(tmpDir, { recursive: true, force: true });
 });
@@ -407,5 +415,197 @@ JSON`,
     expect(captured).toContain("Verification Results");
     expect(captured).toContain("test: pass");
     expect(captured).toContain("lint: pass");
+  });
+});
+
+describe("ReviewerRunnerImpl structured Codex reviewer", () => {
+  function createCodexContext(): WorkflowStepContext {
+    const ctx = createContext();
+    ctx.project.reviewer = "codex";
+    return ctx;
+  }
+
+  it("keeps the legacy codex command when the env flag is disabled", async () => {
+    const argsLog = join(tmpDir, "codex-args.txt");
+    const output = JSON.stringify({ outcome: "pass", findings: [], summary: "Codex OK" });
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}" && cat > /dev/null && echo '${output}'`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createCodexContext());
+
+    expect(result.outcome).toBe("pass");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("exec");
+    expect(args).not.toContain("--output-schema");
+    expect(args).not.toContain("--output-last-message");
+  });
+
+  it("runs codex with --output-schema and --output-last-message and parses the final file", async () => {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "codex-args.txt");
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}"
+schema=""
+final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      schema="$1"
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+if [ ! -f "$schema" ]; then
+  echo "schema missing" >&2
+  exit 17
+fi
+cat > /dev/null
+cat > "$final" <<'JSON'
+{"outcome":"revise","findings":[{"severity":"P0","title":"Null check","detail":"Guard input"}],"summary":"needs guards"}
+JSON
+echo "codex stderr" >&2`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createCodexContext());
+    const logDir = join(artifactDir, "run-1", "attempt-1");
+
+    expect(result.outcome).toBe("revise");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings.at(0)?.title).toBe("Null check");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("exec");
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("--output-last-message");
+    await expect(readFile(join(logDir, "reviewer-final.json"), "utf8")).resolves.toContain(
+      "Null check",
+    );
+    await expect(readFile(join(logDir, "reviewer-output.schema.json"), "utf8")).resolves.toContain(
+      '"outcome"',
+    );
+    await expect(readFile(join(logDir, "reviewer-stderr.log"), "utf8")).resolves.toContain(
+      "codex stderr",
+    );
+  });
+
+  it("tolerates fenced JSON in the final file", async () => {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "codex",
+      `final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+cat > /dev/null
+cat > "$final" <<'TXT'
+Here is the review:
+\`\`\`json
+{"outcome":"pass","findings":[],"summary":"all good"}
+\`\`\`
+TXT`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createCodexContext());
+
+    expect(result.outcome).toBe("pass");
+    expect(result.summary).toBe("all good");
+  });
+
+  it("falls back to stdout parsing when the final file is missing or invalid", async () => {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "codex",
+      `final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+cat > /dev/null
+printf '%s' "not json from final" > "$final"
+echo '{"outcome":"pass","findings":[],"summary":"from stdout"}'`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createCodexContext());
+
+    expect(result.outcome).toBe("pass");
+    expect(result.summary).toBe("from stdout");
+  });
+
+  it("returns blocked when neither the final file nor stdout has valid JSON", async () => {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "codex",
+      `final=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-schema)
+      shift
+      [ -f "$1" ] || exit 17
+      ;;
+    --output-last-message)
+      shift
+      final="$1"
+      ;;
+  esac
+  shift
+done
+cat > /dev/null
+printf '%s' "still not json" > "$final"
+echo "no json on stdout either"`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createCodexContext());
+
+    expect(result.outcome).toBe("blocked");
+  });
+
+  it("uses the structured Codex command only when the resolved tool is codex", async () => {
+    process.env.LOOMFORGE_CODEX_REVIEWER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "claude-args.txt");
+    const output = JSON.stringify({ outcome: "pass", findings: [], summary: "Claude OK" });
+    await writeFakeBinary(
+      "claude",
+      `printf '%s\\n' "$@" > "${argsLog}" && cat > /dev/null && echo '${output}'`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("pass");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("-p");
+    expect(args).not.toContain("--output-schema");
+    expect(args).not.toContain("--output-last-message");
   });
 });

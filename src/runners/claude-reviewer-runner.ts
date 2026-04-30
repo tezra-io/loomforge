@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
@@ -9,6 +9,11 @@ import {
   parseClaudeJsonOutput,
   type ClaudeReviewParseOutcome,
 } from "./claude-reviewer-output-parser.js";
+import {
+  codexReviewerCommand,
+  reviewResultSchemaText,
+  useStructuredCodexReviewer,
+} from "./codex-reviewer-command.js";
 import { agentCommand, type AgentTool } from "./codex-builder-runner.js";
 import { runProcess, isRunnerAuthError, type ProcessRunnerResult } from "./process-runner.js";
 import { reviewPrompt } from "./prompts/reviewer.js";
@@ -36,6 +41,15 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
     const prompt = reviewPrompt(context, diff, attempt.verificationResult);
 
     const tool = project.reviewer ?? this.defaultTool;
+    if (useStructuredCodexReviewer(tool)) {
+      return this.reviewStructuredCodex(
+        prompt,
+        project.timeouts.reviewerMs,
+        workspace.path,
+        logDir,
+      );
+    }
+
     const structured = useStructuredClaudeReviewer(tool);
     const { command, args } = structured ? claudeReviewerCommand() : agentCommand(tool);
     const result = await runProcess({
@@ -78,6 +92,62 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
 
     if (structuredParse) return buildReviewResult(structuredParse.parse, result.stdoutLogPath);
     return buildReviewResult(parseReviewerOutput(result.stdout), result.stdoutLogPath);
+  }
+
+  private async reviewStructuredCodex(
+    prompt: string,
+    timeoutMs: number,
+    cwd: string,
+    logDir: string,
+  ): Promise<ReviewResult> {
+    const paths = structuredCodexReviewerPaths(logDir, "reviewer");
+    await mkdir(logDir, { recursive: true });
+    await writeFile(paths.schemaPath, reviewResultSchemaText(), "utf8");
+
+    const { command, args } = codexReviewerCommand(paths.schemaPath, paths.finalPath);
+    const result = await runProcess({
+      command,
+      args,
+      cwd,
+      stdin: prompt,
+      timeoutMs,
+      artifactDir: logDir,
+      label: "reviewer",
+    });
+
+    if (result.timedOut) {
+      return {
+        outcome: "blocked",
+        findings: [],
+        summary: `Reviewer timed out after ${timeoutMs}ms`,
+        rawLogPath: result.stderrLogPath,
+      };
+    }
+
+    if (result.exitCode !== 0) {
+      if (isRunnerAuthError(result.stderr)) {
+        return {
+          outcome: "blocked",
+          findings: [],
+          summary: `Reviewer authentication failed — re-authenticate and retry: ${truncate(result.stderr, 500)}`,
+          rawLogPath: result.stderrLogPath,
+          failureReason: "runner_auth_missing",
+        };
+      }
+      return {
+        outcome: "blocked",
+        findings: [],
+        summary: `Reviewer exited with code ${result.exitCode}: ${truncate(result.stderr, 500)}`,
+        rawLogPath: result.stderrLogPath,
+      };
+    }
+
+    const finalText = await readExistingText(paths.finalPath);
+    const finalParse = parseReviewerOutput(finalText);
+    if (finalParse.ok) return buildReviewResult(finalParse, result.stdoutLogPath);
+
+    const stdoutParse = parseReviewerOutput(result.stdout);
+    return buildReviewResult(stdoutParse, result.stdoutLogPath);
   }
 
   private async getDiff(cwd: string, defaultBranch: string): Promise<string> {
@@ -184,4 +254,27 @@ function jsonText(value: unknown): string {
 function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength) + "…";
+}
+
+function structuredCodexReviewerPaths(artifactDir: string, label: string) {
+  return {
+    finalPath: join(artifactDir, `${label}-final.json`),
+    schemaPath: join(artifactDir, `${label}-output.schema.json`),
+  };
+}
+
+async function readExistingText(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code: string }).code === "ENOENT"
+    ) {
+      return "";
+    }
+    throw error;
+  }
 }
