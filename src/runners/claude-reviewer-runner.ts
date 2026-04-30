@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
+import type { Logger } from "pino";
 
 import type { ReviewerRunner, ReviewResult, WorkflowStepContext } from "../workflow/types.js";
 import { claudeReviewerCommand, useStructuredClaudeReviewer } from "./claude-reviewer-command.js";
@@ -22,15 +23,18 @@ import { parseReviewerOutput, type ReviewParseResult } from "./review-output-par
 export interface ReviewerRunnerOptions {
   artifactDir: string;
   tool: AgentTool;
+  logger?: Logger;
 }
 
 export class ReviewerRunnerImpl implements ReviewerRunner {
   private readonly artifactDir: string;
   private readonly defaultTool: AgentTool;
+  private readonly logger: Logger | null;
 
   constructor(options: ReviewerRunnerOptions) {
     this.artifactDir = options.artifactDir;
     this.defaultTool = options.tool;
+    this.logger = options.logger ?? null;
   }
 
   async review(context: WorkflowStepContext): Promise<ReviewResult> {
@@ -41,7 +45,12 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
     const prompt = reviewPrompt(context, diff, attempt.verificationResult);
 
     const tool = project.reviewer ?? this.defaultTool;
-    if (useStructuredCodexReviewer(tool)) {
+    const structuredCodex = useStructuredCodexReviewer(tool);
+    const structuredClaude = useStructuredClaudeReviewer(tool);
+    const mode = structuredCodex || structuredClaude ? "structured" : "legacy";
+    this.logger?.info({ runId: run.id, attemptId: attempt.id, tool, mode }, "starting reviewer");
+
+    if (structuredCodex) {
       return this.reviewStructuredCodex(
         prompt,
         project.timeouts.reviewerMs,
@@ -50,7 +59,7 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
       );
     }
 
-    const structured = useStructuredClaudeReviewer(tool);
+    const structured = structuredClaude;
     const { command, args } = structured ? claudeReviewerCommand() : agentCommand(tool);
     const result = await runProcess({
       command,

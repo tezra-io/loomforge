@@ -2,6 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
+import type { Logger } from "pino";
 
 import type {
   BuilderResult,
@@ -33,6 +34,7 @@ export type AgentTool = "claude" | "codex";
 export interface BuilderRunnerOptions {
   artifactDir: string;
   tool: AgentTool;
+  logger?: Logger;
 }
 
 const NOOP_RETRY_PROMPT =
@@ -66,10 +68,12 @@ interface StructuredParseOutcome {
 export class BuilderRunnerImpl implements BuilderRunner {
   private readonly artifactDir: string;
   private readonly defaultTool: AgentTool;
+  private readonly logger: Logger | null;
 
   constructor(options: BuilderRunnerOptions) {
     this.artifactDir = options.artifactDir;
     this.defaultTool = options.tool;
+    this.logger = options.logger ?? null;
   }
 
   async build(context: WorkflowStepContext): Promise<BuilderResult> {
@@ -79,7 +83,12 @@ export class BuilderRunnerImpl implements BuilderRunner {
     const prompt = buildPrompt(context);
     const headBefore = await this.getHead(workspace.path);
 
-    if (useStructuredCodexBuilder(tool)) {
+    const structuredCodex = useStructuredCodexBuilder(tool);
+    const structuredClaude = useStructuredClaudeBuilder(tool);
+    const mode = structuredCodex || structuredClaude ? "structured" : "legacy";
+    this.logger?.info({ runId: run.id, attemptId: attempt.id, tool, mode }, "starting builder");
+
+    if (structuredCodex) {
       return this.buildStructuredCodex(
         context,
         withStructuredOutputInstructions(prompt),
@@ -88,7 +97,7 @@ export class BuilderRunnerImpl implements BuilderRunner {
       );
     }
 
-    if (useStructuredClaudeBuilder(tool)) {
+    if (structuredClaude) {
       return this.buildStructuredClaude(
         context,
         withStructuredClaudeBuilderInstructions(prompt),
