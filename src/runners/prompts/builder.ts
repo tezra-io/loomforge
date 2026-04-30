@@ -84,10 +84,8 @@ export function buildPrompt(context: WorkflowStepContext): string {
   sections.push(
     "## Output",
     "",
-    "End with exactly one of the two blocks below. Pick by what `git status` says,",
-    "not by intent — if your run did not modify any tracked file, you MUST emit",
-    "FAILED_NO_CHANGES even when the issue's work is already on the branch from a",
-    "prior run. Do NOT emit CHANGED_FILES when `git status --short` is empty.",
+    "Pick the block by `git status`, not intent. Empty `git status --short` →",
+    "FAILED_NO_CHANGES, even if the issue's work is already on the branch.",
     "",
     "CHANGED_FILES:",
     "- <path>",
@@ -102,8 +100,7 @@ export function buildPrompt(context: WorkflowStepContext): string {
     "",
     "or:",
     "",
-    "FAILED_NO_CHANGES: <one-line reason — e.g. 'requirement already satisfied by",
-    "commit <sha> on this branch' or 'unable to make change because <X>'>",
+    "FAILED_NO_CHANGES: <one-line reason — already-satisfied or specific blocker>",
   );
 
   return sections.join("\n");
