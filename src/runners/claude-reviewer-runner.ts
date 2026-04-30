@@ -1,12 +1,18 @@
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
 
 import type { ReviewerRunner, ReviewResult, WorkflowStepContext } from "../workflow/types.js";
+import { claudeReviewerCommand, useStructuredClaudeReviewer } from "./claude-reviewer-command.js";
+import {
+  parseClaudeJsonOutput,
+  type ClaudeReviewParseOutcome,
+} from "./claude-reviewer-output-parser.js";
 import { agentCommand, type AgentTool } from "./codex-builder-runner.js";
-import { runProcess, isRunnerAuthError } from "./process-runner.js";
+import { runProcess, isRunnerAuthError, type ProcessRunnerResult } from "./process-runner.js";
 import { reviewPrompt } from "./prompts/reviewer.js";
-import { parseReviewerOutput } from "./review-output-parser.js";
+import { parseReviewerOutput, type ReviewParseResult } from "./review-output-parser.js";
 
 export interface ReviewerRunnerOptions {
   artifactDir: string;
@@ -30,7 +36,8 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
     const prompt = reviewPrompt(context, diff, attempt.verificationResult);
 
     const tool = project.reviewer ?? this.defaultTool;
-    const { command, args } = agentCommand(tool);
+    const structured = useStructuredClaudeReviewer(tool);
+    const { command, args } = structured ? claudeReviewerCommand() : agentCommand(tool);
     const result = await runProcess({
       command,
       args,
@@ -40,6 +47,7 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
       artifactDir: logDir,
       label: "reviewer",
     });
+    const structuredParse = structured ? await writeClaudeReviewArtifacts(result) : null;
 
     if (result.timedOut) {
       return {
@@ -68,7 +76,8 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
       };
     }
 
-    return buildReviewResult(result.stdout, result.stdoutLogPath);
+    if (structuredParse) return buildReviewResult(structuredParse.parse, result.stdoutLogPath);
+    return buildReviewResult(parseReviewerOutput(result.stdout), result.stdoutLogPath);
   }
 
   private async getDiff(cwd: string, defaultBranch: string): Promise<string> {
@@ -84,8 +93,7 @@ export class ReviewerRunnerImpl implements ReviewerRunner {
   }
 }
 
-function buildReviewResult(stdout: string, rawLogPath: string): ReviewResult {
-  const parsed = parseReviewerOutput(stdout);
+function buildReviewResult(parsed: ReviewParseResult, rawLogPath: string): ReviewResult {
   if (parsed.ok) {
     return {
       outcome: parsed.payload.outcome,
@@ -105,6 +113,72 @@ function buildReviewResult(stdout: string, rawLogPath: string): ReviewResult {
     summary,
     rawLogPath,
   };
+}
+
+async function writeClaudeReviewArtifacts(
+  result: ProcessRunnerResult,
+): Promise<ClaudeReviewParseOutcome> {
+  const structuredPath = result.stdoutLogPath.replace(/-stdout\.log$/, "-structured.json");
+  const metadataPath = result.stdoutLogPath.replace(/-stdout\.log$/, "-metadata.json");
+  const parsed = parseClaudeJsonOutput(result.stdout);
+
+  await Promise.all([
+    writeFile(structuredPath, jsonText(parsed.structuredOutput), "utf8"),
+    writeFile(
+      metadataPath,
+      reviewerMetadataText(result, parsed, structuredPath, metadataPath),
+      "utf8",
+    ),
+  ]);
+
+  return parsed;
+}
+
+function reviewerMetadataText(
+  result: ProcessRunnerResult,
+  parsed: ClaudeReviewParseOutcome,
+  structuredPath: string,
+  metadataPath: string,
+): string {
+  const metadata = {
+    outputMode: "json-schema",
+    artifacts: {
+      stdout: result.stdoutLogPath,
+      stderr: result.stderrLogPath,
+      structured: structuredPath,
+      metadata: metadataPath,
+    },
+    process: {
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+    },
+    wrapper: parsed.wrapper,
+    parse: normalizedParse(parsed),
+  };
+
+  return JSON.stringify(metadata, null, 2) + "\n";
+}
+
+function normalizedParse(parsed: ClaudeReviewParseOutcome) {
+  if (!parsed.parse.ok) {
+    return {
+      ok: false,
+      source: parsed.source,
+      reason: parsed.parse.reason,
+    };
+  }
+
+  return {
+    ok: true,
+    source: parsed.source,
+    outcome: parsed.parse.payload.outcome,
+    findings: parsed.parse.payload.findings,
+    summary: parsed.parse.payload.summary,
+  };
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value ?? null, null, 2) + "\n";
 }
 
 function truncate(text: string, maxLength: number): string {

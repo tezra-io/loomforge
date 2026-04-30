@@ -1,4 +1,5 @@
 import type { ReviewFinding } from "../workflow/types.js";
+import { extractJsonCandidates, recoverTruncatedJson } from "./json-output-parser.js";
 
 export type ReviewOutcome = "pass" | "revise" | "blocked";
 
@@ -13,8 +14,6 @@ export type ReviewParseReason = "no_json" | "invalid_shape";
 export type ReviewParseResult =
   | { ok: true; payload: ReviewPayload }
   | { ok: false; reason: ReviewParseReason };
-
-const MAX_CANDIDATES = 16;
 
 export function parseReviewerOutput(stdout: string): ReviewParseResult {
   const candidates = extractJsonCandidates(stdout);
@@ -42,116 +41,16 @@ function tryParseReview(text: string): ReviewPayload | null {
     return null;
   }
 
+  return readReviewPayload(value);
+}
+
+export function readReviewPayload(value: unknown): ReviewPayload | null {
   if (!isReviewShape(value)) return null;
   return {
     outcome: value.outcome,
     findings: value.findings.filter(isValidFinding),
     summary: value.summary,
   };
-}
-
-function extractJsonCandidates(text: string): string[] {
-  const results: string[] = [];
-  const fencePattern = /```(?:json)?\s*\n?([\s\S]*?)\n?```/g;
-  for (const match of text.matchAll(fencePattern)) {
-    const block = match[1]?.trim();
-    if (block) results.push(block);
-    if (results.length >= MAX_CANDIDATES) return results;
-  }
-
-  for (const block of balancedBraceBlocks(text)) {
-    results.push(block);
-    if (results.length >= MAX_CANDIDATES) break;
-  }
-
-  return results;
-}
-
-function recoverTruncatedJson(text: string): string | null {
-  const stack: Array<"{" | "["> = [];
-  let outerStart = -1;
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-
-    if (inString) {
-      if (escape) escape = false;
-      else if (char === "\\") escape = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{" || char === "[") {
-      if (stack.length === 0 && char === "{") outerStart = i;
-      stack.push(char);
-      continue;
-    }
-    if (char === "}" || char === "]") {
-      if (stack.length === 0) continue;
-      stack.pop();
-      if (stack.length === 0) outerStart = -1;
-    }
-  }
-
-  if (inString) return null;
-  if (outerStart < 0 || stack.length === 0) return null;
-
-  const body = text.slice(outerStart).replace(/[\s,]+$/, "");
-  const closes = stack
-    .slice()
-    .reverse()
-    .map((open) => (open === "{" ? "}" : "]"))
-    .join("");
-  return body + closes;
-}
-
-function balancedBraceBlocks(text: string): string[] {
-  const blocks: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (char === "\\") {
-        escape = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) start = i;
-      depth += 1;
-      continue;
-    }
-    if (char === "}") {
-      if (depth === 0) continue;
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        blocks.push(text.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-
-  return blocks;
 }
 
 interface ReviewShape {

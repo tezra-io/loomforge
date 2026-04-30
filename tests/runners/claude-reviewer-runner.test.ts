@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
@@ -12,6 +12,8 @@ let tmpDir: string;
 let repoDir: string;
 let artifactDir: string;
 let binDir: string;
+let originalPath: string | undefined;
+let originalReviewerOutput: string | undefined;
 
 function createContext(overrides: Partial<WorkflowStepContext> = {}): WorkflowStepContext {
   const project =
@@ -86,6 +88,8 @@ async function writeFakeBinary(name: string, script: string): Promise<void> {
 }
 
 beforeEach(async () => {
+  originalPath = process.env.PATH;
+  originalReviewerOutput = process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
   tmpDir = await mkdtemp(join(tmpdir(), "loom-claude-"));
   repoDir = join(tmpDir, "repo");
   artifactDir = join(tmpDir, "artifacts");
@@ -100,9 +104,16 @@ beforeEach(async () => {
   await execa("git", ["-C", repoDir, "checkout", "-b", "dev"]);
 
   process.env.PATH = `${binDir}:${process.env.PATH}`;
+  delete process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
 });
 
 afterEach(async () => {
+  process.env.PATH = originalPath;
+  if (originalReviewerOutput === undefined) {
+    delete process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT;
+  } else {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = originalReviewerOutput;
+  }
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -244,6 +255,132 @@ describe("ReviewerRunnerImpl", () => {
     expect(result.findings.at(0)?.severity).toBe("P0");
   });
 
+  it("uses structured Claude command and writes reviewer artifacts when enabled", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "claude-args.txt");
+    await writeFakeBinary(
+      "claude",
+      `printf '%s\\n' "$@" > "${argsLog}"
+cat > /dev/null
+cat <<'JSON'
+{"type":"result","subtype":"success","is_error":false,"result":"done","structured_output":{"outcome":"pass","findings":[],"summary":"structured pass"}}
+JSON
+echo "structured stderr" >&2`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+    const logDir = join(artifactDir, "run-1", "attempt-1");
+
+    expect(result.outcome).toBe("pass");
+    expect(result.summary).toBe("structured pass");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("-p");
+    expect(args).toContain("--output-format");
+    expect(args).toContain("json");
+    expect(args).toContain("--json-schema");
+    expect(args).toContain('"outcome"');
+    await expect(readFile(join(logDir, "reviewer-stdout.log"), "utf8")).resolves.toContain(
+      "structured_output",
+    );
+    await expect(readFile(join(logDir, "reviewer-stderr.log"), "utf8")).resolves.toContain(
+      "structured stderr",
+    );
+    await expect(readFile(join(logDir, "reviewer-structured.json"), "utf8")).resolves.toContain(
+      "structured pass",
+    );
+    const metadata = JSON.parse(await readFile(join(logDir, "reviewer-metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({
+      outputMode: "json-schema",
+      parse: { ok: true, source: "structured_output", outcome: "pass" },
+    });
+  });
+
+  it("keeps Codex reviewer on the legacy agent command when structured Claude is enabled", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    const argsLog = join(tmpDir, "codex-args.txt");
+    const output = JSON.stringify({ outcome: "pass", findings: [], summary: "Codex OK" });
+    await writeFakeBinary(
+      "codex",
+      `printf '%s\\n' "$@" > "${argsLog}" && cat > /dev/null && echo '${output}'`,
+    );
+
+    const context = createContext();
+    context.project.reviewer = "codex";
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(context);
+
+    expect(result.outcome).toBe("pass");
+    const args = await readFile(argsLog, "utf8");
+    expect(args).toContain("exec");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("--output-format");
+    expect(args).not.toContain("--json-schema");
+  });
+
+  it("falls back to free-form parsing when Claude wrapper JSON is invalid", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    const output = JSON.stringify({ outcome: "pass", findings: [], summary: "fallback OK" });
+    await writeFakeBinary("claude", `printf '%s\\n%s\\n' 'wrapper parse failed' '${output}'`);
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("pass");
+    expect(result.summary).toBe("fallback OK");
+  });
+
+  it("falls back to wrapper result text when structured output is missing", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "claude",
+      `cat > /dev/null
+cat <<'JSON'
+{"type":"result","subtype":"success","is_error":false,"result":"{\\"outcome\\":\\"pass\\",\\"findings\\":[],\\"summary\\":\\"result fallback\\"}"}
+JSON`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("pass");
+    expect(result.summary).toBe("result fallback");
+  });
+
+  it("maps an error wrapper without structured output to blocked", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "claude",
+      `cat > /dev/null
+cat <<'JSON'
+{"type":"result","subtype":"error_max_turns","is_error":true,"result":"failed"}
+JSON`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.summary).toContain("unexpected shape");
+  });
+
+  it("maps a non-success wrapper subtype without structured output to blocked", async () => {
+    process.env.LOOMFORGE_CLAUDE_REVIEWER_OUTPUT = "json-schema";
+    await writeFakeBinary(
+      "claude",
+      `cat > /dev/null
+cat <<'JSON'
+{"type":"result","subtype":"error_during_execution","is_error":false,"result":"failed"}
+JSON`,
+    );
+
+    const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
+    const result = await runner.review(createContext());
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.summary).toContain("unexpected shape");
+  });
+
   it("receives prompt on stdin with verification evidence", async () => {
     const stdinLog = join(tmpDir, "stdin-capture.txt");
     const output = JSON.stringify({ outcome: "pass", findings: [], summary: "OK" });
@@ -263,7 +400,6 @@ describe("ReviewerRunnerImpl", () => {
     const runner = new ReviewerRunnerImpl({ artifactDir, tool: "claude" });
     await runner.review(ctx);
 
-    const { readFile } = await import("node:fs/promises");
     const captured = await readFile(stdinLog, "utf8");
     expect(captured).toContain("staff engineer");
     expect(captured).toContain("Integration");
