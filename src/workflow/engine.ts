@@ -127,6 +127,7 @@ export class WorkflowEngine {
   getProjectStatus(projectSlug: string): ProjectCompletionResult & { done: boolean } {
     this.projectForSlug(projectSlug);
     const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
+    const canonical = latestRunPerIssue(projectRuns);
 
     const shipped: string[] = [];
     const failed: string[] = [];
@@ -134,7 +135,7 @@ export class WorkflowEngine {
     const cancelled: string[] = [];
     const inProgress: string[] = [];
 
-    for (const r of projectRuns) {
+    for (const r of canonical) {
       if (r.state === "shipped") shipped.push(r.issueId);
       else if (r.state === "failed") failed.push(r.issueId);
       else if (r.state === "blocked") blocked.push(r.issueId);
@@ -143,7 +144,7 @@ export class WorkflowEngine {
     }
 
     return {
-      done: inProgress.length === 0 && projectRuns.length > 0,
+      done: inProgress.length === 0 && canonical.length > 0,
       projectSlug,
       shipped,
       failed,
@@ -607,6 +608,7 @@ export class WorkflowEngine {
 
     const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
     if (projectRuns.length === 0) return;
+    const canonical = latestRunPerIssue(projectRuns);
 
     const shipped: string[] = [];
     const shippedIssues: ShippedIssue[] = [];
@@ -614,7 +616,7 @@ export class WorkflowEngine {
     const blocked: string[] = [];
     const cancelled: string[] = [];
 
-    for (const r of projectRuns) {
+    for (const r of canonical) {
       if (r.state === "shipped") {
         shipped.push(r.issueId);
         shippedIssues.push({ id: r.issueId, title: r.issueSnapshot?.title ?? null });
@@ -778,6 +780,17 @@ export class WorkflowEngine {
 
 export function isTerminalState(state: RunState): boolean {
   return state === "shipped" || state === "blocked" || state === "failed" || state === "cancelled";
+}
+
+function latestRunPerIssue(runs: RunRecord[]): RunRecord[] {
+  const byIssue = new Map<string, RunRecord>();
+  for (const run of runs) {
+    const existing = byIssue.get(run.issueId);
+    if (!existing || run.updatedAt >= existing.updatedAt) {
+      byIssue.set(run.issueId, run);
+    }
+  }
+  return [...byIssue.values()];
 }
 
 function linearStatusForState(project: ProjectConfig, state: RunState): string | null {
