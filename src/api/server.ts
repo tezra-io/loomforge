@@ -100,6 +100,7 @@ export function createApiServer(options: CreateApiServerOptions) {
 
   server.get("/queue", async () => ({
     data: options.engine.getQueue(),
+    projectCompletions: options.engine.getActiveProjectCompletions(),
   }));
 
   server.post("/config/reload", async (_request, reply) => {
@@ -205,6 +206,34 @@ export function createApiServer(options: CreateApiServerOptions) {
 
     try {
       return options.engine.getProjectStatus(parsed.data.slug);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+  });
+
+  server.get("/projects/:slug/completion/artifacts", async (request, reply) => {
+    const parsed = z.object({ slug: z.string().min(1) }).safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      return options.engine.getProjectCompletionArtifacts(parsed.data.slug);
+    } catch (error) {
+      return reply.code(400).send({ error: errorMessage(error) });
+    }
+  });
+
+  server.post("/projects/:slug/completion/retry", async (request, reply) => {
+    const parsed = z.object({ slug: z.string().min(1) }).safeParse(request.params);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    try {
+      const result = await options.engine.retryProjectCompletion(parsed.data.slug);
+      const code = retryStatusCode(result.outcome);
+      return reply.code(code).send(result);
     } catch (error) {
       return reply.code(400).send({ error: errorMessage(error) });
     }
@@ -424,6 +453,15 @@ export type LoomApiServer = ReturnType<typeof createApiServer>;
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function retryStatusCode(outcome: string): number {
+  if (outcome === "retried") return 200;
+  if (outcome === "no_completion") return 404;
+  if (outcome === "lease_held") return 409;
+  if (outcome === "not_retryable") return 409;
+  if (outcome === "unavailable") return 503;
+  return 200;
 }
 
 function errorMessage(error: unknown): string {

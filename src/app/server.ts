@@ -76,6 +76,7 @@ export async function startLoomServer(options: StartServerOptions): Promise<Runn
 
   runtime.scheduler.schedule();
   runtime.designScheduler.schedule();
+  void runtime.resumeProjectCompletions();
 
   return {
     server,

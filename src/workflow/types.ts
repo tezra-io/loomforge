@@ -31,6 +31,7 @@ export type BlockedReason =
   | "runner_auth_missing"
   | "dirty_workspace"
   | "review_loop_exhausted"
+  | "review_unparseable"
   | "env_failure";
 
 export type CancelReason = "operator_cancel" | "daemon_shutdown";
@@ -286,6 +287,127 @@ export interface WorkflowRunStore {
   }>;
 }
 
+export interface PrReviewFinding {
+  severity: "P0" | "P1" | "P2";
+  title: string;
+  detail: string;
+  file?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+export interface PrReviewResult {
+  outcome: "pass" | "findings" | "blocked";
+  findings: PrReviewFinding[];
+  summary: string;
+  rawLogPath: string;
+  failureReason?: BlockedReason;
+}
+
+export type ProjectCompletionState =
+  | "pending"
+  | "creating_pr"
+  | "reviewing"
+  | "merge_ready"
+  | "blocked"
+  | "skipped";
+
+export type ProjectCompletionFailureReason =
+  | "incomplete_batch"
+  | "zero_shipped_issues"
+  | "pr_creation_failed"
+  | "env_failure";
+
+export type PrReviewOutcome =
+  | "posted"
+  | "skipped_no_findings"
+  | "skipped_disabled"
+  | "skipped_diff_unavailable"
+  | "skipped_malformed"
+  | "skipped_runner_blocked"
+  | "post_failed";
+
+export interface ProjectCompletionIssue {
+  id: string;
+  title: string | null;
+  description: string | null;
+  acceptanceCriteria: string | null;
+  runId: string;
+  commitShas: string[];
+}
+
+export interface ProjectCompletionRecord {
+  id: string;
+  projectSlug: string;
+  state: ProjectCompletionState;
+  failureReason: ProjectCompletionFailureReason | null;
+  prUrl: string | null;
+  prNumber: number | null;
+  baseBranch: string;
+  devBranch: string;
+  baseSha: string | null;
+  devSha: string | null;
+  shippedIssues: ProjectCompletionIssue[];
+  alreadyCompleteIssueIds: string[];
+  failedIssueIds: string[];
+  blockedIssueIds: string[];
+  cancelledIssueIds: string[];
+  reviewResult: PrReviewResult | null;
+  prReviewOutcome: PrReviewOutcome | null;
+  prReviewUrl: string | null;
+  findingCounts: { p0: number; p1: number; p2: number };
+  postPrReviewComments: boolean;
+  blockingSeverities: Array<"P0" | "P1" | "P2">;
+  reviewPartialPr: boolean;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+export interface CreateProjectCompletionInput {
+  id: string;
+  projectSlug: string;
+  baseBranch: string;
+  devBranch: string;
+  shippedIssues: ProjectCompletionIssue[];
+  alreadyCompleteIssueIds: string[];
+  failedIssueIds: string[];
+  blockedIssueIds: string[];
+  cancelledIssueIds: string[];
+  postPrReviewComments: boolean;
+  blockingSeverities: Array<"P0" | "P1" | "P2">;
+  reviewPartialPr: boolean;
+  createdAt: string;
+}
+
+export interface ProjectArtifactRecord {
+  id: string;
+  completionId: string;
+  kind: string;
+  path: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ProjectCompletionStore {
+  createOrResumeProjectCompletion(input: CreateProjectCompletionInput): ProjectCompletionRecord;
+  updateProjectCompletion(record: ProjectCompletionRecord): void;
+  getProjectCompletion(id: string): ProjectCompletionRecord | null;
+  getLatestProjectCompletion(projectSlug: string): ProjectCompletionRecord | null;
+  listActiveProjectCompletions(): ProjectCompletionRecord[];
+  acquireProjectCompletionLease(
+    completionId: string,
+    ownerId: string,
+    expiresAt: string,
+    now: string,
+  ): boolean;
+  releaseProjectCompletionLease(completionId: string, ownerId: string, now: string): void;
+  saveProjectArtifact(artifact: ProjectArtifactRecord): void;
+  listProjectArtifacts(completionId: string): ProjectArtifactRecord[];
+}
+
 export interface ProjectCompletionResult {
   projectSlug: string;
   shipped: string[];
@@ -306,6 +428,82 @@ export interface PullRequestCreator {
   createPr(project: ProjectConfig, title: string, body: string): Promise<{ url: string } | null>;
 }
 
+export interface MergePrContent {
+  title: string;
+  body: string;
+}
+
+export interface PullRequestSnapshot {
+  url: string;
+  number: number;
+  baseBranch: string;
+  devBranch: string;
+  baseSha: string;
+  devSha: string;
+  body: string;
+}
+
+export type CreateOrUpdatePrResult =
+  | { outcome: "success"; pullRequest: PullRequestSnapshot }
+  | { outcome: "failed"; reason: "push_failed" | "gh_failed"; summary: string };
+
+export interface PullRequestManager {
+  createOrUpdatePr(
+    project: ProjectConfig,
+    content: MergePrContent,
+  ): Promise<CreateOrUpdatePrResult>;
+}
+
+export type DiffSnapshotResult =
+  | { outcome: "success"; diff: string; baseSha: string; devSha: string }
+  | {
+      outcome: "unavailable";
+      reason: "fetch_failed" | "diff_failed";
+      summary: string;
+    };
+
+export interface ProjectDiffSnapshotter {
+  snapshot(project: ProjectConfig): Promise<DiffSnapshotResult>;
+}
+
+export interface ProjectReviewContext {
+  completion: ProjectCompletionRecord;
+  project: ProjectConfig;
+  pullRequest: PullRequestSnapshot;
+  diff: string;
+  shippedIssues: ProjectCompletionIssue[];
+  artifactDir: string;
+}
+
+export interface ProjectReviewerRunner {
+  reviewProject(context: ProjectReviewContext): Promise<PrReviewResult>;
+}
+
+export interface ProjectCompletionCoordinatorTrigger {
+  project: ProjectConfig;
+  canonicalRuns: RunRecord[];
+  triggerRunId: string | null;
+}
+
+export type ProjectCompletionRetryOutcome =
+  | { outcome: "retried"; completion: ProjectCompletionRecord }
+  | { outcome: "no_completion" }
+  | { outcome: "lease_held"; completion: ProjectCompletionRecord }
+  | { outcome: "not_retryable"; completion: ProjectCompletionRecord };
+
+export interface ProjectCompletionCoordinator {
+  startOrResume(trigger: ProjectCompletionCoordinatorTrigger): Promise<ProjectCompletionRecord>;
+  retry(project: ProjectConfig): Promise<ProjectCompletionRetryOutcome>;
+}
+
+export type PrReviewPostResult =
+  | { outcome: "posted"; reviewUrl: string }
+  | { outcome: "post_failed"; summary: string };
+
+export interface GhPrReviewPoster {
+  post(pullRequest: PullRequestSnapshot, review: PrReviewResult): Promise<PrReviewPostResult>;
+}
+
 export interface WorkflowEngineOptions {
   registry: ProjectConfigRegistry;
   linear: LinearWorkflowClient;
@@ -313,9 +511,11 @@ export interface WorkflowEngineOptions {
   builder: BuilderRunner;
   reviewer: ReviewerRunner;
   store?: WorkflowRunStore;
+  completionStore?: ProjectCompletionStore;
   artifacts?: ArtifactWriter;
   logger?: EngineLogger;
   pullRequests?: PullRequestCreator;
+  projectCompletionCoordinator?: ProjectCompletionCoordinator;
   onProjectComplete?: (result: ProjectCompletionResult) => void;
   newId?: () => string;
   now?: () => string;

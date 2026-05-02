@@ -23,7 +23,12 @@ import {
   ReviewerRunnerImpl,
 } from "../runners/index.js";
 import { WorkflowEngine } from "../workflow/index.js";
+import { ProjectCompletionCoordinatorImpl } from "../workflow/project-completion.js";
+import { FsProjectArtifactWriter } from "../workflow/project-artifact-writer.js";
+import { GitProjectDiffSnapshotter } from "../workflow/project-diff-snapshotter.js";
+import { ProjectReviewerRunnerImpl } from "../runners/project-reviewer-runner.js";
 import { GitWorkspaceManager } from "../worktrees/index.js";
+import { GhPrReviewPoster } from "../worktrees/gh-pr-review-poster.js";
 import { GhPullRequestCreator } from "../worktrees/pull-request-creator.js";
 import {
   createDrainScheduler,
@@ -48,6 +53,7 @@ export interface LoomRuntime {
   adhocLinear: LinearAdhocClient;
   logger: Logger;
   reloadConfig(): Promise<ReloadConfigResult>;
+  resumeProjectCompletions(): Promise<void>;
   close(): void;
 }
 
@@ -81,15 +87,30 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
     : createMissingKeyClient();
   const artifacts = new ArtifactStore(options.registry.runtime.dataRoot);
   const pullRequests = new GhPullRequestCreator();
+  const projectReviewer = new ProjectReviewerRunnerImpl();
+  const prReviewPoster = new GhPrReviewPoster();
+  const diffSnapshotter = new GitProjectDiffSnapshotter();
+  const projectCompletionCoordinator = new ProjectCompletionCoordinatorImpl({
+    store,
+    pullRequests,
+    diffSnapshotter,
+    reviewer: projectReviewer,
+    poster: prReviewPoster,
+    artifactRoot: join(options.registry.runtime.dataRoot, "artifacts/projects"),
+    artifactWriter: new FsProjectArtifactWriter(),
+    logger: logger.child({ component: "project-completion" }),
+  });
   const engine = new WorkflowEngine({
     registry: options.registry,
     store,
+    completionStore: store,
     artifacts,
     linear,
     worktrees,
     builder,
     reviewer,
     pullRequests,
+    projectCompletionCoordinator,
     logger: logger.child({ component: "engine" }),
     onProjectComplete: (result) => {
       logger.info(
@@ -153,6 +174,22 @@ export function createLoomRuntime(options: CreateLoomRuntimeOptions): LoomRuntim
     adhocLinear: linear,
     logger,
     reloadConfig,
+    resumeProjectCompletions: async () => {
+      try {
+        const resumed = await engine.resumeActiveProjectCompletions();
+        if (resumed.length > 0) {
+          logger.info(
+            { count: resumed.length, slugs: resumed.map((r) => r.projectSlug) },
+            "resumed active project completions on startup",
+          );
+        }
+      } catch (error: unknown) {
+        logger.warn(
+          { error: error instanceof Error ? error.message : String(error) },
+          "failed to resume active project completions on startup",
+        );
+      }
+    },
     close: () => {
       store.close();
     },

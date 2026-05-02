@@ -6,7 +6,16 @@ import type { ProjectConfig } from "../config/index.js";
 import { parseRunHandoff } from "../artifacts/handoff.js";
 import type {
   BuilderResult,
+  CreateProjectCompletionInput,
   IssueSnapshot,
+  PrReviewOutcome,
+  PrReviewResult,
+  ProjectArtifactRecord,
+  ProjectCompletionFailureReason,
+  ProjectCompletionIssue,
+  ProjectCompletionRecord,
+  ProjectCompletionState,
+  ProjectCompletionStore,
   ReviewResult,
   RunAttemptRecord,
   RunEvent,
@@ -21,7 +30,7 @@ import { migrations, schemaVersion, sqliteSchema } from "./schema.js";
 
 type Row = Record<string, unknown>;
 
-export class SqliteRunStore implements WorkflowRunStore {
+export class SqliteRunStore implements WorkflowRunStore, ProjectCompletionStore {
   private readonly db: DatabaseSync;
 
   constructor(db: DatabaseSync) {
@@ -146,11 +155,298 @@ export class SqliteRunStore implements WorkflowRunStore {
     return this.db
       .prepare(
         `SELECT * FROM runs
-        WHERE state NOT IN ('shipped', 'blocked', 'failed', 'cancelled')
+        WHERE state NOT IN ('shipped', 'already_complete', 'blocked', 'failed', 'cancelled')
         ORDER BY queue_position IS NULL, queue_position ASC, updated_at ASC`,
       )
       .all()
       .map((row) => this.toRun(row));
+  }
+
+  createOrResumeProjectCompletion(input: CreateProjectCompletionInput): ProjectCompletionRecord {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.findActiveCompletionRow(input.projectSlug);
+      if (existing) {
+        this.db.exec("COMMIT");
+        return this.toProjectCompletion(existing);
+      }
+
+      const record = newProjectCompletionRecord(input);
+      this.insertProjectCompletion(record);
+      this.db.exec("COMMIT");
+      return record;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  updateProjectCompletion(record: ProjectCompletionRecord): void {
+    this.db
+      .prepare(
+        `UPDATE project_completions SET
+          state = ?,
+          failure_reason = ?,
+          pr_url = ?,
+          pr_number = ?,
+          base_branch = ?,
+          dev_branch = ?,
+          base_sha = ?,
+          dev_sha = ?,
+          shipped_issues_json = ?,
+          already_complete_issue_ids_json = ?,
+          failed_issue_ids_json = ?,
+          blocked_issue_ids_json = ?,
+          cancelled_issue_ids_json = ?,
+          review_result_json = ?,
+          pr_review_outcome = ?,
+          pr_review_url = ?,
+          finding_counts_json = ?,
+          post_pr_review_comments = ?,
+          blocking_severities_json = ?,
+          review_partial_pr = ?,
+          updated_at = ?,
+          completed_at = ?
+        WHERE id = ?`,
+      )
+      .run(
+        record.state,
+        record.failureReason,
+        record.prUrl,
+        record.prNumber,
+        record.baseBranch,
+        record.devBranch,
+        record.baseSha,
+        record.devSha,
+        JSON.stringify(record.shippedIssues),
+        JSON.stringify(record.alreadyCompleteIssueIds),
+        JSON.stringify(record.failedIssueIds),
+        JSON.stringify(record.blockedIssueIds),
+        JSON.stringify(record.cancelledIssueIds),
+        stringifyNullable(record.reviewResult),
+        record.prReviewOutcome,
+        record.prReviewUrl,
+        JSON.stringify(record.findingCounts),
+        record.postPrReviewComments ? 1 : 0,
+        JSON.stringify(record.blockingSeverities),
+        record.reviewPartialPr ? 1 : 0,
+        record.updatedAt,
+        record.completedAt,
+        record.id,
+      );
+  }
+
+  getProjectCompletion(id: string): ProjectCompletionRecord | null {
+    const row = this.db.prepare("SELECT * FROM project_completions WHERE id = ?").get(id);
+    return row ? this.toProjectCompletion(row) : null;
+  }
+
+  getLatestProjectCompletion(projectSlug: string): ProjectCompletionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM project_completions
+         WHERE project_slug = ?
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .get(projectSlug);
+    return row ? this.toProjectCompletion(row) : null;
+  }
+
+  listActiveProjectCompletions(): ProjectCompletionRecord[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM project_completions
+         WHERE state IN ('pending', 'creating_pr', 'reviewing')
+         ORDER BY created_at ASC`,
+      )
+      .all()
+      .map((row) => this.toProjectCompletion(row));
+  }
+
+  releaseProjectCompletionLease(completionId: string, ownerId: string, now: string): void {
+    this.db
+      .prepare(
+        `UPDATE project_completions
+         SET lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+         WHERE id = ? AND lease_owner = ?`,
+      )
+      .run(now, completionId, ownerId);
+  }
+
+  acquireProjectCompletionLease(
+    completionId: string,
+    ownerId: string,
+    expiresAt: string,
+    now: string,
+  ): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT lease_owner, lease_expires_at FROM project_completions
+           WHERE id = ?`,
+        )
+        .get(completionId) as
+        | { lease_owner: string | null; lease_expires_at: string | null }
+        | undefined;
+      if (!row) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      const heldByOther =
+        row.lease_owner !== null &&
+        row.lease_owner !== ownerId &&
+        row.lease_expires_at !== null &&
+        row.lease_expires_at > now;
+      if (heldByOther) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      this.db
+        .prepare(
+          `UPDATE project_completions
+           SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(ownerId, expiresAt, now, completionId);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  saveProjectArtifact(artifact: ProjectArtifactRecord): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO project_artifacts (
+          id, completion_id, kind, path, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        artifact.id,
+        artifact.completionId,
+        artifact.kind,
+        artifact.path,
+        JSON.stringify(artifact.metadata),
+        artifact.createdAt,
+      );
+  }
+
+  listProjectArtifacts(completionId: string): ProjectArtifactRecord[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM project_artifacts
+         WHERE completion_id = ?
+         ORDER BY created_at ASC`,
+      )
+      .all(completionId)
+      .map((row) => ({
+        id: readString(row, "id"),
+        completionId: readString(row, "completion_id"),
+        kind: readString(row, "kind"),
+        path: readString(row, "path"),
+        metadata: readJson<Record<string, unknown>>(row, "metadata_json") ?? {},
+        createdAt: readString(row, "created_at"),
+      }));
+  }
+
+  private findActiveCompletionRow(projectSlug: string): Row | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM project_completions
+         WHERE project_slug = ?
+           AND state IN ('pending', 'creating_pr', 'reviewing')
+         LIMIT 1`,
+      )
+      .get(projectSlug);
+    return (row as Row | undefined) ?? null;
+  }
+
+  private insertProjectCompletion(record: ProjectCompletionRecord): void {
+    this.db
+      .prepare(
+        `INSERT INTO project_completions (
+          id, project_slug, state, failure_reason, pr_url, pr_number,
+          base_branch, dev_branch, base_sha, dev_sha,
+          shipped_issues_json, already_complete_issue_ids_json,
+          failed_issue_ids_json, blocked_issue_ids_json, cancelled_issue_ids_json,
+          review_result_json, pr_review_outcome, pr_review_url,
+          finding_counts_json, post_pr_review_comments,
+          blocking_severities_json, review_partial_pr,
+          lease_owner, lease_expires_at, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.projectSlug,
+        record.state,
+        record.failureReason,
+        record.prUrl,
+        record.prNumber,
+        record.baseBranch,
+        record.devBranch,
+        record.baseSha,
+        record.devSha,
+        JSON.stringify(record.shippedIssues),
+        JSON.stringify(record.alreadyCompleteIssueIds),
+        JSON.stringify(record.failedIssueIds),
+        JSON.stringify(record.blockedIssueIds),
+        JSON.stringify(record.cancelledIssueIds),
+        stringifyNullable(record.reviewResult),
+        record.prReviewOutcome,
+        record.prReviewUrl,
+        JSON.stringify(record.findingCounts),
+        record.postPrReviewComments ? 1 : 0,
+        JSON.stringify(record.blockingSeverities),
+        record.reviewPartialPr ? 1 : 0,
+        record.leaseOwner,
+        record.leaseExpiresAt,
+        record.createdAt,
+        record.updatedAt,
+        record.completedAt,
+      );
+  }
+
+  private toProjectCompletion(row: Row): ProjectCompletionRecord {
+    return {
+      id: readString(row, "id"),
+      projectSlug: readString(row, "project_slug"),
+      state: readString(row, "state") as ProjectCompletionState,
+      failureReason: readNullableString(
+        row,
+        "failure_reason",
+      ) as ProjectCompletionFailureReason | null,
+      prUrl: readNullableString(row, "pr_url"),
+      prNumber: readNullableNumber(row, "pr_number"),
+      baseBranch: readString(row, "base_branch"),
+      devBranch: readString(row, "dev_branch"),
+      baseSha: readNullableString(row, "base_sha"),
+      devSha: readNullableString(row, "dev_sha"),
+      shippedIssues: readJson<ProjectCompletionIssue[]>(row, "shipped_issues_json") ?? [],
+      alreadyCompleteIssueIds: readJson<string[]>(row, "already_complete_issue_ids_json") ?? [],
+      failedIssueIds: readJson<string[]>(row, "failed_issue_ids_json") ?? [],
+      blockedIssueIds: readJson<string[]>(row, "blocked_issue_ids_json") ?? [],
+      cancelledIssueIds: readJson<string[]>(row, "cancelled_issue_ids_json") ?? [],
+      reviewResult: readJson<PrReviewResult>(row, "review_result_json"),
+      prReviewOutcome: readNullableString(row, "pr_review_outcome") as PrReviewOutcome | null,
+      prReviewUrl: readNullableString(row, "pr_review_url"),
+      findingCounts: readJson<{ p0: number; p1: number; p2: number }>(
+        row,
+        "finding_counts_json",
+      ) ?? { p0: 0, p1: 0, p2: 0 },
+      postPrReviewComments: readNumber(row, "post_pr_review_comments") === 1,
+      blockingSeverities:
+        readJson<Array<"P0" | "P1" | "P2">>(row, "blocking_severities_json") ?? [],
+      reviewPartialPr: readNumber(row, "review_partial_pr") === 1,
+      leaseOwner: readNullableString(row, "lease_owner"),
+      leaseExpiresAt: readNullableString(row, "lease_expires_at"),
+      createdAt: readString(row, "created_at"),
+      updatedAt: readString(row, "updated_at"),
+      completedAt: readNullableString(row, "completed_at"),
+    };
   }
 
   private applySchema(): void {
@@ -461,6 +757,38 @@ export class SqliteRunStore implements WorkflowRunStore {
 
 function stringifyNullable(value: unknown): string | null {
   return value === null ? null : JSON.stringify(value);
+}
+
+function newProjectCompletionRecord(input: CreateProjectCompletionInput): ProjectCompletionRecord {
+  return {
+    id: input.id,
+    projectSlug: input.projectSlug,
+    state: "pending",
+    failureReason: null,
+    prUrl: null,
+    prNumber: null,
+    baseBranch: input.baseBranch,
+    devBranch: input.devBranch,
+    baseSha: null,
+    devSha: null,
+    shippedIssues: input.shippedIssues,
+    alreadyCompleteIssueIds: input.alreadyCompleteIssueIds,
+    failedIssueIds: input.failedIssueIds,
+    blockedIssueIds: input.blockedIssueIds,
+    cancelledIssueIds: input.cancelledIssueIds,
+    reviewResult: null,
+    prReviewOutcome: null,
+    prReviewUrl: null,
+    findingCounts: { p0: 0, p1: 0, p2: 0 },
+    postPrReviewComments: input.postPrReviewComments,
+    blockingSeverities: input.blockingSeverities,
+    reviewPartialPr: input.reviewPartialPr,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+    completedAt: null,
+  };
 }
 
 function readString(row: Row, key: string): string {

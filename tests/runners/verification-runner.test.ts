@@ -35,7 +35,12 @@ function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
       reviewerMs: 60_000,
       verificationMs: 30_000,
     },
-    review: { maxRevisionLoops: 3, blockingSeverities: ["P0", "P1"] },
+    review: {
+      maxRevisionLoops: 3,
+      blockingSeverities: ["P0", "P1"],
+      postPrReviewComments: true,
+      reviewPartialPr: false,
+    },
     linearStatuses: {
       inProgress: "In Progress",
       inReview: "In Review",

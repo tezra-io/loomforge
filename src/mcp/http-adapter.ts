@@ -27,6 +27,7 @@ export interface LoomHttpAdapter {
   cleanupWorkspace(projectSlug: string): Promise<unknown>;
   submitProject(projectSlug: string): Promise<unknown>;
   getProjectStatus(projectSlug: string): Promise<unknown>;
+  retryProjectCompletion(projectSlug: string): Promise<unknown>;
   designNew(payload: DesignNewPayload): Promise<unknown>;
   designExtend(payload: DesignExtendPayload): Promise<unknown>;
   getDesignRun(designRunId: string): Promise<unknown>;
@@ -52,6 +53,8 @@ export function createHttpAdapter(options: LoomHttpClientOptions): LoomHttpAdapt
       requestJson(options, "POST", "/projects/submit", { projectSlug }),
     getProjectStatus: (projectSlug) =>
       requestJson(options, "GET", `/projects/${encodeURIComponent(projectSlug)}/status`),
+    retryProjectCompletion: (projectSlug) =>
+      requestJson(options, "POST", `/projects/${encodeURIComponent(projectSlug)}/completion/retry`),
     designNew: (payload) => requestJson(options, "POST", "/design/new", payload),
     designExtend: (payload) => requestJson(options, "POST", "/design/extend", payload),
     getDesignRun: (id) => requestJson(options, "GET", `/design/${encodeURIComponent(id)}`),

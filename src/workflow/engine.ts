@@ -13,6 +13,8 @@ import type {
   FailedReason,
   FailureReason,
   IssueSnapshot,
+  ProjectArtifactRecord,
+  ProjectCompletionRecord,
   RevisionInput,
   RunAttemptRecord,
   RunEvent,
@@ -124,7 +126,10 @@ export class WorkflowEngine {
     return this.queue.map((runId) => this.getRun(runId));
   }
 
-  getProjectStatus(projectSlug: string): ProjectCompletionResult & { done: boolean } {
+  getProjectStatus(projectSlug: string): ProjectCompletionResult & {
+    done: boolean;
+    completion: ProjectCompletionRecord | null;
+  } {
     this.projectForSlug(projectSlug);
     const projectRuns = [...this.runs.values()].filter((r) => r.projectSlug === projectSlug);
     const canonical = latestRunPerIssue(projectRuns);
@@ -145,16 +150,70 @@ export class WorkflowEngine {
       else inProgress.push(r.issueId);
     }
 
+    const completion =
+      this.options.completionStore?.getLatestProjectCompletion(projectSlug) ?? null;
+    const completionActive = completion !== null && isActiveCompletionState(completion.state);
+
     return {
-      done: inProgress.length === 0 && canonical.length > 0,
+      done: inProgress.length === 0 && canonical.length > 0 && !completionActive,
       projectSlug,
       shipped,
       alreadyComplete,
       failed,
       blocked,
       cancelled,
-      pullRequestUrl: null,
+      pullRequestUrl: completion?.prUrl ?? null,
+      completion,
     };
+  }
+
+  getActiveProjectCompletions(): ProjectCompletionRecord[] {
+    return this.options.completionStore?.listActiveProjectCompletions() ?? [];
+  }
+
+  getProjectCompletionArtifacts(projectSlug: string): {
+    completionId: string | null;
+    artifacts: ProjectArtifactRecord[];
+  } {
+    this.projectForSlug(projectSlug);
+    const completion =
+      this.options.completionStore?.getLatestProjectCompletion(projectSlug) ?? null;
+    if (!completion) return { completionId: null, artifacts: [] };
+    const artifacts = this.options.completionStore?.listProjectArtifacts(completion.id) ?? [];
+    return { completionId: completion.id, artifacts };
+  }
+
+  async retryProjectCompletion(projectSlug: string): Promise<{
+    outcome: "retried" | "no_completion" | "lease_held" | "not_retryable" | "unavailable";
+    completion?: ProjectCompletionRecord;
+  }> {
+    const project = this.projectForSlug(projectSlug);
+    const coordinator = this.options.projectCompletionCoordinator;
+    if (!coordinator) return { outcome: "unavailable" };
+    const result = await coordinator.retry(project);
+    if (result.outcome === "no_completion") return { outcome: "no_completion" };
+    return { outcome: result.outcome, completion: result.completion };
+  }
+
+  async resumeActiveProjectCompletions(): Promise<ProjectCompletionRecord[]> {
+    const coordinator = this.options.projectCompletionCoordinator;
+    const completionStore = this.options.completionStore;
+    if (!coordinator || !completionStore) return [];
+    const active = completionStore.listActiveProjectCompletions();
+    const resumed: ProjectCompletionRecord[] = [];
+    for (const record of active) {
+      const project = this.options.registry.bySlug.get(record.projectSlug);
+      if (!project) {
+        this.log.warn(
+          { projectSlug: record.projectSlug, completionId: record.id },
+          "active project completion has no matching project; skipping resume",
+        );
+        continue;
+      }
+      const result = await coordinator.retry(project);
+      if (result.outcome === "retried") resumed.push(result.completion);
+    }
+    return resumed;
   }
 
   cancelRun(runId: string, reason: CancelReason = "operator_cancel"): RunRecord {
@@ -636,24 +695,11 @@ export class WorkflowEngine {
       else if (r.state === "cancelled") cancelled.push(r.issueId);
     }
 
-    let pullRequestUrl: string | null = null;
-    if (shippedIssues.length > 0 && this.options.pullRequests) {
-      const project = this.projectForSlug(projectSlug);
-      const { title, body } = buildMergePr(projectSlug, project.defaultBranch, shippedIssues);
-
-      try {
-        const pr = await this.options.pullRequests.createPr(project, title, body);
-        pullRequestUrl = pr?.url ?? null;
-        if (pullRequestUrl) {
-          this.log.info({ projectSlug, pullRequestUrl }, "created PR for project");
-        }
-      } catch (error: unknown) {
-        this.log.warn(
-          { projectSlug, error: error instanceof Error ? error.message : String(error) },
-          "failed to create PR",
-        );
-      }
-    }
+    const project = this.projectForSlug(projectSlug);
+    const coordinator = this.options.projectCompletionCoordinator;
+    const pullRequestUrl = coordinator
+      ? await this.runProjectCompletionCoordinator(coordinator, project, canonical)
+      : await this.runLegacyProjectCompletion(project, shippedIssues);
 
     const result: ProjectCompletionResult = {
       projectSlug,
@@ -677,6 +723,54 @@ export class WorkflowEngine {
     );
 
     this.options.onProjectComplete?.(result);
+  }
+
+  private async runProjectCompletionCoordinator(
+    coordinator: NonNullable<WorkflowEngineOptions["projectCompletionCoordinator"]>,
+    project: ProjectConfig,
+    canonical: RunRecord[],
+  ): Promise<string | null> {
+    try {
+      const completion = await coordinator.startOrResume({
+        project,
+        canonicalRuns: canonical,
+        triggerRunId: null,
+      });
+      return completion.prUrl ?? null;
+    } catch (error: unknown) {
+      this.log.warn(
+        {
+          projectSlug: project.slug,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "project completion coordinator failed",
+      );
+      return null;
+    }
+  }
+
+  private async runLegacyProjectCompletion(
+    project: ProjectConfig,
+    shippedIssues: ShippedIssue[],
+  ): Promise<string | null> {
+    if (shippedIssues.length === 0 || !this.options.pullRequests) return null;
+    const { title, body } = buildMergePr(project.slug, project.defaultBranch, shippedIssues);
+    try {
+      const pr = await this.options.pullRequests.createPr(project, title, body);
+      const url = pr?.url ?? null;
+      if (url)
+        this.log.info({ projectSlug: project.slug, pullRequestUrl: url }, "created PR for project");
+      return url;
+    } catch (error: unknown) {
+      this.log.warn(
+        {
+          projectSlug: project.slug,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "failed to create PR",
+      );
+      return null;
+    }
   }
 
   private isIdle(): boolean {
@@ -794,6 +888,10 @@ export class WorkflowEngine {
     });
     return run;
   }
+}
+
+function isActiveCompletionState(state: ProjectCompletionRecord["state"]): boolean {
+  return state === "pending" || state === "creating_pr" || state === "reviewing";
 }
 
 export function isTerminalState(state: RunState): boolean {

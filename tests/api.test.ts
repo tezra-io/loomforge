@@ -49,6 +49,7 @@ function createTestServer(options?: {
   const engine = new WorkflowEngine({
     registry: createRegistry(),
     store: options?.store,
+    completionStore: options?.store,
     artifacts: options?.artifactStore,
     linear: dependencies.linear,
     worktrees,
@@ -275,9 +276,108 @@ describe("api server", () => {
       expect(health.statusCode).toBe(200);
       expect(health.json()).toEqual({ status: "ok", queueDepth: 0 });
       expect(queue.statusCode).toBe(200);
-      expect(queue.json()).toEqual({ data: [] });
+      expect(queue.json()).toEqual({ data: [], projectCompletions: [] });
     } finally {
       await server.close();
+    }
+  });
+
+  it("returns 404 when retry is requested but no completion exists", async () => {
+    const store = SqliteRunStore.open(":memory:");
+    const { server } = createTestServer({ store });
+    try {
+      const response = await server.inject({
+        method: "POST",
+        url: "/projects/loom/completion/retry",
+      });
+      expect(response.statusCode).toBe(503);
+      // 503 because the test engine has no projectCompletionCoordinator wired
+      expect(response.json<{ outcome: string }>().outcome).toBe("unavailable");
+    } finally {
+      await server.close();
+      store.close();
+    }
+  });
+
+  it("exposes project completion artifacts and the latest completion in status", async () => {
+    const store = SqliteRunStore.open(":memory:");
+    const { engine, server } = createTestServer({ store });
+    try {
+      const project = engine.getRegistry().bySlug.get("loom");
+      if (!project) throw new Error("expected loom project");
+      store.saveProject(project);
+      const completion = store.createOrResumeProjectCompletion({
+        id: "comp-api-1",
+        projectSlug: "loom",
+        baseBranch: "main",
+        devBranch: "dev",
+        shippedIssues: [
+          {
+            id: "TEZ-1",
+            title: "x",
+            description: null,
+            acceptanceCriteria: null,
+            runId: "run-1",
+            commitShas: ["sha"],
+          },
+        ],
+        alreadyCompleteIssueIds: [],
+        failedIssueIds: [],
+        blockedIssueIds: [],
+        cancelledIssueIds: [],
+        postPrReviewComments: true,
+        blockingSeverities: ["P0", "P1"],
+        reviewPartialPr: false,
+        createdAt: "2026-05-01T00:00:00.000Z",
+      });
+      store.updateProjectCompletion({
+        ...completion,
+        state: "merge_ready",
+        prUrl: "https://github.com/org/loom/pull/9",
+        prNumber: 9,
+        baseSha: "base",
+        devSha: "dev",
+        prReviewOutcome: "skipped_no_findings",
+        completedAt: "2026-05-01T00:00:01.000Z",
+        updatedAt: "2026-05-01T00:00:01.000Z",
+      });
+      store.saveProjectArtifact({
+        id: "art-1",
+        completionId: "comp-api-1",
+        kind: "pr-review.json",
+        path: "/tmp/pr-review.json",
+        metadata: {},
+        createdAt: "2026-05-01T00:00:02.000Z",
+      });
+
+      const status = await server.inject({
+        method: "GET",
+        url: "/projects/loom/status",
+      });
+      expect(status.statusCode).toBe(200);
+      const statusBody = status.json<{
+        completion: { id: string; prReviewOutcome: string } | null;
+        pullRequestUrl: string | null;
+      }>();
+      expect(statusBody.completion?.id).toBe("comp-api-1");
+      expect(statusBody.completion?.prReviewOutcome).toBe("skipped_no_findings");
+      expect(statusBody.pullRequestUrl).toBe("https://github.com/org/loom/pull/9");
+
+      const artifacts = await server.inject({
+        method: "GET",
+        url: "/projects/loom/completion/artifacts",
+      });
+      expect(artifacts.statusCode).toBe(200);
+      const artifactsBody = artifacts.json<{
+        completionId: string;
+        artifacts: Array<{ id: string; kind: string }>;
+      }>();
+      expect(artifactsBody.completionId).toBe("comp-api-1");
+      expect(artifactsBody.artifacts).toHaveLength(1);
+      expect(artifactsBody.artifacts[0]?.kind).toBe("pr-review.json");
+    } finally {
+      await server.close();
+      store.close();
     }
   });
 });

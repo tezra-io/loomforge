@@ -214,6 +214,8 @@ projects:
       review: {
         maxRevisionLoops: 3,
         blockingSeverities: ["P0", "P1"],
+        postPrReviewComments: true,
+        reviewPartialPr: false,
       },
       linearStatuses: {
         inProgress: "In Progress",
@@ -221,6 +223,32 @@ projects:
         done: "Done",
         blocked: "Blocked",
       },
+    });
+  });
+
+  it("honors explicit postPrReviewComments and reviewPartialPr in the review block", () => {
+    const registry = parseProjectConfigRegistry(
+      `
+projects:
+  - slug: loom
+    repoRoot: /repos/loom
+    defaultBranch: main
+    verification:
+      commands:
+        - name: unit
+          command: pnpm test
+    review:
+      postPrReviewComments: false
+      reviewPartialPr: true
+`,
+      { homeDir: "/Users/alice" },
+    );
+
+    expect(registry.projects[0]?.review).toEqual({
+      maxRevisionLoops: 3,
+      blockingSeverities: ["P0", "P1"],
+      postPrReviewComments: false,
+      reviewPartialPr: true,
     });
   });
 
