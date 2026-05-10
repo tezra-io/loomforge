@@ -201,7 +201,12 @@ function buildProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
     runtimeDataRoot: "/runtime",
     verification: { commands: [] },
     timeouts: { builderMs: 1, reviewerMs: 1, verificationMs: 1 },
-    review: { maxRevisionLoops: 1, blockingSeverities: ["P0"] },
+    review: {
+      maxRevisionLoops: 1,
+      blockingSeverities: ["P0"],
+      postPrReviewComments: true,
+      reviewPartialPr: false,
+    },
     linearStatuses: {
       inProgress: "In Progress",
       inReview: "In Review",

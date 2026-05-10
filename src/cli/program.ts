@@ -177,6 +177,56 @@ export function createCliProgram(options: CreateCliProgramOptions = {}): Command
       );
     });
 
+  const projectCommand = program.command("project").description("Inspect project-level state");
+
+  projectCommand
+    .command("status")
+    .description("Show project status, including the latest project completion")
+    .argument("<projectSlug>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (projectSlug: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "GET",
+          `/projects/${encodeURIComponent(projectSlug)}/status`,
+        ),
+      );
+    });
+
+  projectCommand
+    .command("artifacts")
+    .description("List artifacts attached to the latest project completion")
+    .argument("<projectSlug>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (projectSlug: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "GET",
+          `/projects/${encodeURIComponent(projectSlug)}/completion/artifacts`,
+        ),
+      );
+    });
+
+  projectCommand
+    .command("retry")
+    .description("Retry the latest blocked, post-failed, or stuck project completion")
+    .argument("<projectSlug>")
+    .option("-u, --url <url>", "daemon URL", defaultDaemonUrl())
+    .action(async (projectSlug: string, commandOptions: UrlCommandOptions) => {
+      writeJson(
+        write,
+        await requestJson(
+          { baseUrl: commandOptions.url },
+          "POST",
+          `/projects/${encodeURIComponent(projectSlug)}/completion/retry`,
+        ),
+      );
+    });
+
   const configCommand = program
     .command("config")
     .description("Inspect and reload Loomforge configuration");

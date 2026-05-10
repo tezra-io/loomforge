@@ -99,6 +99,17 @@ export function createMcpServer(adapter: LoomHttpAdapter): McpServer {
   );
 
   mcp.tool(
+    "loom_retry_project_completion",
+    "Retry the latest blocked, post-failed, or stuck project completion (re-creates PR, re-runs PR review, or re-posts PR comments as needed)",
+    {
+      projectSlug: z.string().min(1).describe("Project slug from loom config"),
+    },
+    async ({ projectSlug }) => {
+      return safeCall(() => adapter.retryProjectCompletion(projectSlug));
+    },
+  );
+
+  mcp.tool(
     "loom_cleanup_workspace",
     "Reset project workspace to clean state on the default branch",
     { projectSlug: z.string().min(1).describe("Project slug from loom config") },

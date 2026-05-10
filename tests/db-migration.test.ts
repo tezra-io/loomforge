@@ -169,7 +169,12 @@ describe("v1 to v2 schema migration", () => {
       runtimeDataRoot: "/data/test2",
       verification: { commands: [{ name: "test", command: "echo ok", timeoutMs: 10_000 }] },
       timeouts: { builderMs: 60_000, reviewerMs: 60_000, verificationMs: 30_000 },
-      review: { maxRevisionLoops: 3, blockingSeverities: ["P0", "P1"] },
+      review: {
+        maxRevisionLoops: 3,
+        blockingSeverities: ["P0", "P1"],
+        postPrReviewComments: true,
+        reviewPartialPr: false,
+      },
       linearStatuses: {
         inProgress: "In Progress",
         inReview: "In Review",

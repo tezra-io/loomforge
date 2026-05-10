@@ -1,11 +1,8 @@
+import type { MergePrContent } from "./types.js";
+
 export interface ShippedIssue {
   id: string;
   title: string | null;
-}
-
-export interface MergePrContent {
-  title: string;
-  body: string;
 }
 
 export function buildMergePr(

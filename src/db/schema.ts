@@ -1,4 +1,4 @@
-export const schemaVersion = 6;
+export const schemaVersion = 7;
 
 export interface SchemaMigration {
   version: number;
@@ -103,6 +103,68 @@ ALTER TABLE design_runs ADD COLUMN registered_at INTEGER;
     skipIfColumnExists: { table: "runs", column: "source" },
     sql: `
 ALTER TABLE runs ADD COLUMN source TEXT NOT NULL DEFAULT 'linear';
+`,
+  },
+  {
+    version: 7,
+    sql: `
+CREATE TABLE IF NOT EXISTS project_completions (
+  id TEXT PRIMARY KEY,
+  project_slug TEXT NOT NULL,
+  state TEXT NOT NULL,
+  failure_reason TEXT,
+  pr_url TEXT,
+  pr_number INTEGER,
+  base_branch TEXT NOT NULL,
+  dev_branch TEXT NOT NULL,
+  base_sha TEXT,
+  dev_sha TEXT,
+  shipped_issues_json TEXT NOT NULL,
+  already_complete_issue_ids_json TEXT NOT NULL,
+  failed_issue_ids_json TEXT NOT NULL,
+  blocked_issue_ids_json TEXT NOT NULL,
+  cancelled_issue_ids_json TEXT NOT NULL,
+  review_result_json TEXT,
+  pr_review_outcome TEXT,
+  pr_review_url TEXT,
+  finding_counts_json TEXT NOT NULL,
+  post_pr_review_comments INTEGER NOT NULL,
+  blocking_severities_json TEXT NOT NULL,
+  review_partial_pr INTEGER NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (project_slug) REFERENCES projects(slug)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS project_completions_active_uq
+  ON project_completions(project_slug)
+  WHERE state IN ('pending', 'creating_pr', 'reviewing');
+
+CREATE INDEX IF NOT EXISTS project_completions_slug_created_idx
+  ON project_completions(project_slug, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS project_completion_events (
+  id TEXT PRIMARY KEY,
+  completion_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  details_json TEXT NOT NULL,
+  FOREIGN KEY (completion_id) REFERENCES project_completions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS project_artifacts (
+  id TEXT PRIMARY KEY,
+  completion_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (completion_id) REFERENCES project_completions(id) ON DELETE CASCADE
+);
 `,
   },
 ];
@@ -240,6 +302,57 @@ CREATE TABLE IF NOT EXISTS design_runs (
   UNIQUE (slug, feature)
 );
 
+CREATE TABLE IF NOT EXISTS project_completions (
+  id TEXT PRIMARY KEY,
+  project_slug TEXT NOT NULL,
+  state TEXT NOT NULL,
+  failure_reason TEXT,
+  pr_url TEXT,
+  pr_number INTEGER,
+  base_branch TEXT NOT NULL,
+  dev_branch TEXT NOT NULL,
+  base_sha TEXT,
+  dev_sha TEXT,
+  shipped_issues_json TEXT NOT NULL,
+  already_complete_issue_ids_json TEXT NOT NULL,
+  failed_issue_ids_json TEXT NOT NULL,
+  blocked_issue_ids_json TEXT NOT NULL,
+  cancelled_issue_ids_json TEXT NOT NULL,
+  review_result_json TEXT,
+  pr_review_outcome TEXT,
+  pr_review_url TEXT,
+  finding_counts_json TEXT NOT NULL,
+  post_pr_review_comments INTEGER NOT NULL,
+  blocking_severities_json TEXT NOT NULL,
+  review_partial_pr INTEGER NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  FOREIGN KEY (project_slug) REFERENCES projects(slug)
+);
+
+CREATE TABLE IF NOT EXISTS project_completion_events (
+  id TEXT PRIMARY KEY,
+  completion_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  details_json TEXT NOT NULL,
+  FOREIGN KEY (completion_id) REFERENCES project_completions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS project_artifacts (
+  id TEXT PRIMARY KEY,
+  completion_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  metadata_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (completion_id) REFERENCES project_completions(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS runs_project_state_idx ON runs(project_slug, state);
 CREATE INDEX IF NOT EXISTS runs_queue_idx ON runs(queue_position) WHERE queue_position IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_run_created_idx ON events(run_id, created_at);
@@ -248,4 +361,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS design_runs_slug_null_feature_uq
   ON design_runs(slug) WHERE feature IS NULL;
 CREATE INDEX IF NOT EXISTS design_runs_queue_idx
   ON design_runs(queue_position) WHERE queue_position IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS project_completions_active_uq
+  ON project_completions(project_slug)
+  WHERE state IN ('pending', 'creating_pr', 'reviewing');
+CREATE INDEX IF NOT EXISTS project_completions_slug_created_idx
+  ON project_completions(project_slug, created_at DESC);
 `;

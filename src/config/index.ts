@@ -36,6 +36,8 @@ const reviewSchema = z
   .object({
     maxRevisionLoops: z.number().int().nonnegative().optional(),
     blockingSeverities: z.array(nonEmptyStringSchema).optional(),
+    postPrReviewComments: z.boolean().optional(),
+    reviewPartialPr: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -133,6 +135,8 @@ export interface ProjectTimeoutConfig {
 export interface ProjectReviewConfig {
   maxRevisionLoops: number;
   blockingSeverities: string[];
+  postPrReviewComments: boolean;
+  reviewPartialPr: boolean;
 }
 
 export interface LinearStatusConfig {
@@ -363,6 +367,8 @@ function buildProjectConfig(
     review: {
       maxRevisionLoops: project.review?.maxRevisionLoops ?? 3,
       blockingSeverities: project.review?.blockingSeverities ?? ["P0", "P1"],
+      postPrReviewComments: project.review?.postPrReviewComments ?? true,
+      reviewPartialPr: project.review?.reviewPartialPr ?? false,
     },
     linearStatuses: {
       inProgress: project.linearStatuses?.inProgress ?? "In Progress",
